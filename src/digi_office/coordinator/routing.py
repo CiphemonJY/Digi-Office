@@ -1,33 +1,82 @@
 ROUTING_TABLE = {
+    # ── Ontology pipeline (Ciphemon → DGX validation) ──────────────
     "expand_ontology": {
         "default": "ciphemon",
         "fallback": "hermes",
-        "required_capabilities": ["python", "embeddings"],
+        "required_capabilities": ["python", "embeddings", "crosswalk"],
         "proxy": False,
     },
+    "ontology_validate": {
+        "default": "dgx_primary",
+        "fallback": "dgx_secondary",
+        "required_capabilities": [],
+        "proxy": True,
+    },
+    "ontology_quality_check": {
+        "default": "dgx_primary",
+        "fallback": "dgx_secondary",
+        "required_capabilities": [],
+        "proxy": True,
+    },
+
+    # ── FHIR generation pipeline (DGX produces, Jetson stores) ────
+    "fhir_generate": {
+        "default": "dgx_primary",
+        "fallback": "dgx_secondary",
+        "required_capabilities": [],
+        "proxy": True,
+    },
     "fhir_validate": {
+        "default": "dgx_primary",
+        "fallback": "jetson",
+        "required_capabilities": [],
+        "proxy": True,
+    },
+    "fhir_bundle_clean": {
         "default": "jetson",
         "fallback": "hermes",
         "required_capabilities": [],
         "proxy": True,
     },
+
+    # ── Model training / eval (DGX only) ───────────────────────────
     "llm_finetune": {
         "default": "dgx_primary",
         "fallback": "dgx_secondary",
         "required_capabilities": [],
         "proxy": True,
     },
+    "model_eval": {
+        "default": "dgx_primary",
+        "fallback": "dgx_secondary",
+        "required_capabilities": [],
+        "proxy": True,
+    },
+    "model_export": {
+        "default": "dgx_primary",
+        "fallback": "dgx_secondary",
+        "required_capabilities": [],
+        "proxy": True,
+    },
+
+    # ── Fleet sync (Hermes dispatches to all) ─────────────────────
+    "data_sync": {
+        "default": "ciphemon",
+        "fallback": "hermes",
+        "required_capabilities": ["git"],
+        "proxy": False,
+    },
+    "sync_fleet": {
+        "default": "hermes",
+        "fallback": None,
+        "required_capabilities": ["ssh"],
+        "proxy": False,  # Hermes loops over machines itself
+    },
     "render_3d": {
         "default": "dgx_secondary",
         "fallback": "dgx_primary",
         "required_capabilities": [],
         "proxy": True,
-    },
-    "data_sync": {
-        "default": "hermes",
-        "fallback": None,
-        "required_capabilities": ["git", "ssh"],
-        "proxy": False,
     },
 }
 
