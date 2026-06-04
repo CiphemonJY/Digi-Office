@@ -308,11 +308,21 @@ def _run_proxy_task(task: dict):
     conn.close()
     emit("proxy_start", source="hermes", target=machine, task_id=task_id)
 
-    success, result = proxy.run_task(machine, task["type"], payload)
-    if success:
-        complete_task(task_id, result_payload=result)
-    else:
-        fail_task(task_id, result.get("error", "proxy failure"))
+    try:
+        success, result = proxy.run_task(machine, task["type"], payload)
+        if success:
+            complete_task(task_id, result_payload=result)
+            emit("proxy_complete", source="hermes", target=machine, task_id=task_id,
+                 details={"result": result})
+        else:
+            fail_task(task_id, result.get("error", "proxy failure"))
+            emit("proxy_failed", source="hermes", target=machine, task_id=task_id,
+                 details={"error": result.get("error", "proxy failure")})
+    except Exception as e:
+        err = str(e)[:500]
+        fail_task(task_id, err)
+        emit("proxy_failed", source="hermes", target=machine, task_id=task_id,
+             details={"error": err, "exception": True})
 
 
 # ── Dashboard ──────────────────────────────────────────────────────────
