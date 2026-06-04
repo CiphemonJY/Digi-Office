@@ -1,0 +1,16 @@
+[Unit]
+Description=Digi-Office Coordinator
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/digi_office
+ExecStart=%h/.local/bin/python3 -m uvicorn coordinator.server:app --host 0.0.0.0 --port 8080
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+Environment=PYTHONPATH=%h/digi_office
+
+[Install]
+WantedBy=default.target

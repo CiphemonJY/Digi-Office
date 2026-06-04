@@ -1,0 +1,54 @@
+{
+  "_comment": "Digi-Office sprite sheet config. Each entry maps to a PNG file in static/sprites/. Run generate_sheets.py to create example PNGs, then swap them out with your own art.",
+  "version": "1.0",
+  "frameWidth": 48,
+  "frameHeight": 48,
+  "states": ["idle", "work", "sleep", "tool"],
+  "sprites": {
+    "ciphemon": {
+      "sheet": "sprites/ciphemon.png",
+      "frameWidth": 48,
+      "frameHeight": 48,
+      "scale": 1,
+      "states": {
+        "idle":  { "row": 0, "frames": 2, "fps": 3 },
+        "work":  { "row": 1, "frames": 2, "fps": 7 },
+        "sleep": { "row": 2, "frames": 1, "fps": 1 },
+        "tool":  { "row": 3, "frames": 2, "fps": 9 }
+      }
+    },
+    "hermes": {
+      "sheet": "sprites/hermes.png",
+      "frameWidth": 48,
+      "frameHeight": 48,
+      "scale": 1,
+      "states": {
+        "idle":  { "row": 0, "frames": 2, "fps": 3 },
+        "work":  { "row": 1, "frames": 2, "fps": 7 },
+        "sleep": { "row": 2, "frames": 1, "fps": 1 },
+        "tool":  { "row": 3, "frames": 2, "fps": 9 }
+      }
+    },
+    "worker": {
+      "sheet": "sprites/worker.png",
+      "frameWidth": 48,
+      "frameHeight": 48,
+      "scale": 1,
+      "states": {
+        "idle":  { "row": 0, "frames": 2, "fps": 3 },
+        "work":  { "row": 1, "frames": 2, "fps": 7 },
+        "sleep": { "row": 2, "frames": 1, "fps": 1 },
+        "tool":  { "row": 3, "frames": 2, "fps": 9 }
+      }
+    }
+  },
+  "agentMap": {
+    "_comment": "Maps agent IDs to sprite keys. 'default' applies to any unrecognised agent.",
+    "ciphemon":     "ciphemon",
+    "hermes":       "hermes",
+    "jetson":       "worker",
+    "dgx_primary":  "worker",
+    "dgx_secondary":"worker",
+    "default":      "worker"
+  }
+}

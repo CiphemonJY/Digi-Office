@@ -1,0 +1,910 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Digi-Office</title>
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#0b0d14;--surface:#141720;--surface2:#1c2030;--border:#252a3a;
+  --accent:#5b8af5;--green:#3ecf8e;--red:#ff5c5c;--yellow:#f5a623;
+  --purple:#a855f7;--cyan:#06b6d4;--orange:#f97316;
+  --text:#e2e8f0;--muted:#8892a4;--radius:8px;
+  --font:system-ui,'Segoe UI',sans-serif;
+}
+html,body{height:100%;overflow:hidden}
+body{font-family:var(--font);background:var(--bg);color:var(--text);display:flex;flex-direction:column}
+
+/* ── Header ── */
+#header{
+  display:flex;align-items:center;justify-content:space-between;
+  padding:10px 18px;border-bottom:1px solid var(--border);
+  background:var(--surface);flex-shrink:0;gap:12px;
+}
+#header h1{font-size:1rem;font-weight:600;letter-spacing:.4px;white-space:nowrap}
+.header-right{display:flex;align-items:center;gap:12px}
+#conn-badge{
+  font-size:.7rem;padding:2px 8px;border-radius:20px;font-weight:600;
+  background:rgba(62,207,142,.15);color:var(--green);
+}
+#conn-badge.polling{background:rgba(245,166,35,.15);color:var(--yellow)}
+#conn-badge.offline{background:rgba(255,92,92,.15);color:var(--red)}
+#health-info{font-size:.72rem;color:var(--muted)}
+.btn{
+  background:var(--accent);color:#fff;border:none;border-radius:6px;
+  padding:5px 12px;font-size:.8rem;cursor:pointer;font-weight:500;
+}
+.btn:hover{opacity:.88}
+.btn-ghost{background:transparent!important;border:1px solid var(--border)!important;color:var(--muted)!important}
+
+/* ── 3-panel layout ── */
+#app{display:flex;flex:1;overflow:hidden}
+
+/* Left: agents */
+#panel-agents{
+  width:230px;min-width:200px;flex-shrink:0;
+  border-right:1px solid var(--border);
+  overflow-y:auto;padding:10px 8px;display:flex;flex-direction:column;gap:8px;
+}
+#panel-agents h2{font-size:.72rem;text-transform:uppercase;letter-spacing:.8px;
+  color:var(--muted);padding:2px 4px;margin-bottom:2px}
+
+/* Center: feed */
+#panel-feed{
+  flex:1;display:flex;flex-direction:column;
+  border-right:1px solid var(--border);min-width:0;
+}
+#feed-header{
+  padding:8px 14px;border-bottom:1px solid var(--border);
+  display:flex;align-items:center;justify-content:space-between;flex-shrink:0;
+}
+#feed-header h2{font-size:.72rem;text-transform:uppercase;letter-spacing:.8px;color:var(--muted)}
+#feed-scroll{flex:1;overflow-y:auto;padding:6px 0}
+.feed-empty{padding:24px;color:var(--muted);font-size:.82rem;text-align:center}
+
+/* Right: tasks */
+#panel-tasks{
+  width:320px;min-width:260px;flex-shrink:0;
+  display:flex;flex-direction:column;
+}
+#tasks-header{
+  padding:8px 14px;border-bottom:1px solid var(--border);
+  display:flex;align-items:center;gap:8px;flex-shrink:0;flex-wrap:wrap;
+}
+#tasks-header h2{font-size:.72rem;text-transform:uppercase;letter-spacing:.8px;color:var(--muted);flex:1}
+#tasks-header select{
+  background:var(--surface);border:1px solid var(--border);color:var(--text);
+  border-radius:5px;padding:3px 6px;font-size:.75rem;
+}
+#task-scroll{flex:1;overflow-y:auto}
+
+/* ── Agent card ── */
+.agent-card{
+  background:var(--surface2);border:1px solid var(--border);
+  border-radius:var(--radius);overflow:hidden;
+}
+.agent-canvas{display:block;width:100%;height:100px;image-rendering:pixelated}
+.agent-meta{padding:7px 9px}
+.agent-name{font-size:.82rem;font-weight:600;display:flex;align-items:center;gap:5px;margin-bottom:3px}
+.dot{width:7px;height:7px;border-radius:50%;flex-shrink:0}
+.dot-on{background:var(--green);box-shadow:0 0 5px var(--green)}
+.dot-off{background:var(--muted)}
+.agent-caps{font-size:.67rem;color:var(--muted);line-height:1.4}
+.agent-curtask{font-size:.68rem;color:var(--yellow);margin-top:2px;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+/* ── Feed events ── */
+.ev{
+  display:grid;grid-template-columns:52px 22px 1fr;
+  align-items:start;gap:0 6px;
+  padding:5px 14px;border-bottom:1px solid rgba(255,255,255,.03);
+  font-size:.78rem;line-height:1.4;
+  cursor:default;transition:background .1s;
+}
+.ev:hover{background:rgba(255,255,255,.02)}
+.ev-time{color:var(--muted);font-size:.68rem;font-family:monospace;margin-top:1px;white-space:nowrap}
+.ev-icon{font-size:.9rem;line-height:1.6}
+.ev-body{}
+.ev-who{font-weight:600;margin-right:4px}
+.ev-desc{color:var(--muted)}
+.ev-detail{font-size:.7rem;color:var(--border);margin-top:1px;font-family:monospace}
+
+/* event type colours */
+.ev-task_created .ev-who{color:var(--muted)}
+.ev-task_claimed .ev-who{color:var(--accent)}
+.ev-task_done .ev-who{color:var(--green)}
+.ev-task_failed .ev-who{color:var(--red)}
+.ev-task_retry .ev-who{color:var(--yellow)}
+.ev-task_progress .ev-who{color:var(--accent)}
+.ev-a2a_send .ev-who{color:var(--cyan)}
+.ev-tool_call .ev-who{color:var(--purple)}
+.ev-tool_result .ev-who{color:var(--purple)}
+.ev-agent_online .ev-who{color:var(--green)}
+.ev-agent_offline .ev-who{color:var(--muted)}
+.ev-proxy_start .ev-who{color:var(--orange)}
+
+/* ── Task rows ── */
+.task-row{
+  padding:8px 12px;border-bottom:1px solid rgba(255,255,255,.04);
+  cursor:pointer;font-size:.78rem;
+}
+.task-row:hover{background:rgba(255,255,255,.03)}
+.task-row-top{display:flex;align-items:center;gap:6px;margin-bottom:2px}
+.task-type{font-weight:600;flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.task-agent{font-size:.68rem;color:var(--muted)}
+.task-id{font-family:monospace;font-size:.67rem;color:var(--muted)}
+.badge{
+  display:inline-block;font-size:.67rem;font-weight:700;
+  padding:1px 6px;border-radius:20px;text-transform:uppercase;letter-spacing:.3px;flex-shrink:0;
+}
+.bp{background:rgba(245,166,35,.15);color:var(--yellow)}
+.bc{background:rgba(91,138,245,.15);color:var(--accent)}
+.br{background:rgba(91,138,245,.15);color:var(--accent)}
+.bd{background:rgba(62,207,142,.15);color:var(--green)}
+.bf{background:rgba(255,92,92,.15);color:var(--red)}
+
+/* ── Modal ── */
+#modal-bg{
+  display:none;position:fixed;inset:0;background:rgba(0,0,0,.7);
+  z-index:200;align-items:center;justify-content:center;
+}
+#modal-bg.open{display:flex}
+#modal{
+  background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);
+  width:min(680px,95vw);max-height:85vh;overflow-y:auto;padding:22px;
+}
+#modal h2{font-size:.95rem;margin-bottom:14px}
+.mf{margin-bottom:10px}
+.mf label{display:block;font-size:.7rem;color:var(--muted);margin-bottom:3px}
+.mf pre{
+  background:var(--bg);border:1px solid var(--border);border-radius:5px;
+  padding:8px;font-size:.75rem;white-space:pre-wrap;word-break:break-all;
+  max-height:160px;overflow-y:auto;
+}
+.mlog{font-size:.72rem;color:var(--muted);padding:2px 0;border-bottom:1px solid var(--border)}
+.mlog:last-child{border-bottom:none}
+#mc{float:right;background:none;border:none;color:var(--muted);font-size:1.1rem;cursor:pointer}
+
+/* ── Submit modal ── */
+#submit-bg{
+  display:none;position:fixed;inset:0;background:rgba(0,0,0,.7);
+  z-index:200;align-items:center;justify-content:center;
+}
+#submit-bg.open{display:flex}
+#submit-box{
+  background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);
+  width:min(500px,95vw);padding:22px;
+}
+#submit-box h3{font-size:.9rem;margin-bottom:14px}
+.fr{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px}
+.fr input,.fr select,.fr textarea{
+  background:var(--bg);border:1px solid var(--border);color:var(--text);
+  border-radius:5px;padding:6px 9px;font-size:.82rem;flex:1;min-width:160px;
+}
+.fr textarea{min-height:70px;resize:vertical;font-family:monospace}
+.fa{display:flex;gap:7px;margin-top:10px}
+#submit-msg{font-size:.75rem;margin-top:6px}
+
+/* ── Scrollbars ── */
+::-webkit-scrollbar{width:5px;height:5px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px}
+</style>
+</head>
+<body>
+
+<div id="header">
+  <h1>&#9670; Digi-Office</h1>
+  <div class="header-right">
+    <span id="conn-badge">CONNECTING</span>
+    <span id="health-info">—</span>
+    <button class="btn" onclick="openSubmit()">+ Task</button>
+    <button class="btn btn-ghost" onclick="hardRefresh()">&#8635;</button>
+  </div>
+</div>
+
+<div id="app">
+  <!-- Left: agents -->
+  <div id="panel-agents">
+    <h2>Agents</h2>
+    <div id="agents-list"></div>
+  </div>
+
+  <!-- Center: live feed -->
+  <div id="panel-feed">
+    <div id="feed-header">
+      <h2>Live Feed</h2>
+      <div style="display:flex;gap:6px;align-items:center">
+        <select id="feed-filter" onchange="applyFeedFilter()" style="background:var(--surface);border:1px solid var(--border);color:var(--text);border-radius:5px;padding:2px 6px;font-size:.72rem">
+          <option value="">All events</option>
+          <option value="task">Tasks only</option>
+          <option value="a2a">A2A only</option>
+          <option value="tool">Tool calls</option>
+        </select>
+        <button class="btn btn-ghost" style="padding:2px 8px;font-size:.72rem" onclick="clearFeed()">Clear</button>
+      </div>
+    </div>
+    <div id="feed-scroll">
+      <div class="feed-empty">Connecting to event stream…</div>
+    </div>
+  </div>
+
+  <!-- Right: task queue -->
+  <div id="panel-tasks">
+    <div id="tasks-header">
+      <h2>Task Queue</h2>
+      <select id="task-filter" onchange="loadTasks()">
+        <option value="">All</option>
+        <option value="pending">Pending</option>
+        <option value="claimed">Claimed</option>
+        <option value="running">Running</option>
+        <option value="done">Done</option>
+        <option value="failed">Failed</option>
+      </select>
+    </div>
+    <div id="task-scroll"></div>
+  </div>
+</div>
+
+<!-- Task detail modal -->
+<div id="modal-bg" onclick="closeModal(event)">
+  <div id="modal">
+    <button id="mc" onclick="closeModal()">&#10005;</button>
+    <h2 id="modal-title">Task</h2>
+    <div id="modal-body"></div>
+  </div>
+</div>
+
+<!-- Submit modal -->
+<div id="submit-bg" onclick="closeSubmit(event)">
+  <div id="submit-box">
+    <button style="float:right;background:none;border:none;color:var(--muted);font-size:1.1rem;cursor:pointer" onclick="closeSubmit()">&#10005;</button>
+    <h3>New Task</h3>
+    <div class="fr">
+      <select id="new-type">
+        <option value="expand_ontology">expand_ontology</option>
+        <option value="fhir_validate">fhir_validate</option>
+        <option value="llm_finetune">llm_finetune</option>
+        <option value="render_3d">render_3d</option>
+        <option value="data_sync">data_sync</option>
+      </select>
+      <input id="new-priority" type="number" value="1" min="1" max="10" placeholder="Priority" style="max-width:90px">
+    </div>
+    <div class="fr">
+      <input id="new-target" placeholder="target_machine (optional)">
+    </div>
+    <div class="fr">
+      <textarea id="new-payload" placeholder='{"system":"loinc"}'>{}</textarea>
+    </div>
+    <div class="fa">
+      <button class="btn" onclick="submitTask()">Submit</button>
+      <button class="btn btn-ghost" onclick="closeSubmit()">Cancel</button>
+    </div>
+    <div id="submit-msg"></div>
+  </div>
+</div>
+
+<script>
+// ════════════════════════════════════════════════════════
+//  SPRITE ENGINE
+// ════════════════════════════════════════════════════════
+const PX = 4;
+
+const PAL = {
+  ciphemon:[null,'#0f172a','#bfdbfe','#3b82f6','#06b6d4','#fff','#f472b6','#fca5a5','#a855f7','#1d4ed8'],
+  hermes:  [null,'#0f172a','#fef3c7','#fbbf24','#111827','#ef4444','#f59e0b','#fff','#d97706','#fde68a'],
+  worker:  [null,'#0f172a','#bbf7d0','#16a34a','#ef4444','#fff','#94a3b8','#fcd34d','#065f46','#6ee7b7'],
+};
+
+const SPRITES = {
+  ciphemon:{
+    idle:[
+      [[0,0,1,1,0,0,0,1,1,0,0,0],[0,1,2,2,1,0,1,2,2,1,0,0],[0,1,2,7,1,0,1,7,2,1,0,0],
+       [0,1,2,2,2,2,2,2,2,1,0,0],[0,1,2,3,2,2,2,3,2,1,0,0],[0,1,4,4,5,2,5,4,4,1,0,0],
+       [0,1,2,2,2,8,2,2,2,1,0,0],[0,1,2,6,2,2,2,6,2,1,0,0],[0,0,1,2,2,2,2,2,1,0,0,0],
+       [0,1,2,2,2,2,2,2,2,2,1,0],[0,1,2,6,3,3,3,6,2,2,1,0],[0,0,1,2,1,0,1,2,1,0,0,0]],
+      [[0,0,1,1,0,0,0,1,1,0,0,0],[0,1,2,2,1,0,1,2,2,1,0,0],[0,1,2,7,1,0,1,7,2,1,0,0],
+       [0,1,2,2,2,2,2,2,2,1,0,0],[0,1,2,3,2,2,2,3,2,1,0,0],[0,1,1,1,5,2,5,1,1,1,0,0],
+       [0,1,2,2,2,8,2,2,2,1,0,0],[0,1,2,6,2,2,2,6,2,1,0,0],[0,0,1,2,2,2,2,2,1,0,0,0],
+       [0,1,2,2,2,2,2,2,2,2,1,0],[0,1,2,6,3,3,3,6,2,2,1,0],[0,0,1,2,1,0,1,2,1,0,0,0]],
+    ],
+    work:[
+      [[0,0,1,1,0,0,0,1,1,0,0,0],[0,1,2,2,1,0,1,2,2,1,0,0],[0,1,2,7,1,0,1,7,2,1,0,0],
+       [0,1,2,2,2,2,2,2,2,1,0,0],[0,1,2,3,2,2,2,3,2,1,0,0],[0,1,4,4,4,2,4,4,4,1,0,0],
+       [0,1,2,2,2,8,2,2,2,1,0,0],[0,1,2,2,6,2,6,2,2,1,0,0],[0,0,1,2,2,2,2,2,1,0,0,0],
+       [0,1,2,2,9,9,9,2,2,2,1,0],[0,1,9,6,3,3,3,6,9,2,1,0],[0,0,1,9,1,0,1,9,1,0,0,0]],
+      [[0,0,1,1,0,0,0,1,1,0,0,0],[0,1,2,2,1,0,1,2,2,1,0,0],[0,1,2,7,1,0,1,7,2,1,0,0],
+       [0,1,2,2,2,2,2,2,2,1,0,0],[0,1,2,3,2,2,2,3,2,1,0,0],[0,1,4,4,5,2,5,4,4,1,0,0],
+       [0,1,2,2,2,8,2,2,2,1,0,0],[0,1,2,2,6,2,6,2,2,1,0,0],[0,0,1,2,2,2,2,2,1,0,0,0],
+       [0,1,2,9,9,2,9,9,2,2,1,0],[0,1,2,6,3,3,3,6,2,2,1,0],[0,9,1,2,1,0,1,2,1,9,0,0]],
+    ],
+    sleep:[
+      [[0,0,1,1,0,0,0,1,1,0,0,0],[0,1,2,2,1,0,1,2,2,1,0,0],[0,1,2,7,1,0,1,7,2,1,0,0],
+       [0,1,2,2,2,2,2,2,2,1,0,0],[0,1,2,3,2,2,2,3,2,1,0,0],[0,1,1,2,5,2,5,2,1,1,0,0],
+       [0,0,1,2,2,8,2,2,1,0,0,0],[0,0,0,1,2,2,2,1,0,0,0,0],[0,0,1,2,2,2,2,2,1,0,0,0],
+       [0,1,2,2,2,2,2,2,2,2,1,0],[0,1,2,6,3,3,3,6,2,2,1,0],[0,0,1,2,2,2,2,2,1,0,0,0]],
+    ],
+  },
+  hermes:{
+    idle:[
+      [[0,0,0,0,1,1,1,0,0,0,0,0],[0,0,0,1,2,2,2,1,0,0,0,0],[0,0,1,2,2,4,2,2,1,0,0,0],
+       [0,0,5,5,2,2,2,1,0,0,0,0],[0,0,0,1,2,2,2,2,1,0,0,0],[0,0,1,2,3,2,2,3,2,1,0,0],
+       [0,1,3,3,2,2,2,2,3,3,1,0],[0,1,2,2,2,2,2,2,2,2,1,0],[0,0,1,2,3,2,2,3,2,1,0,0],
+       [0,0,0,1,2,2,2,1,0,0,0,0],[0,0,0,1,5,0,5,1,0,0,0,0],[0,0,0,1,1,0,1,1,0,0,0,0]],
+      [[0,0,0,0,1,1,1,0,0,0,0,0],[0,0,0,1,2,2,2,1,0,0,0,0],[0,0,1,2,2,1,2,2,1,0,0,0],
+       [0,0,5,5,2,2,2,1,0,0,0,0],[0,0,0,1,2,2,2,2,1,0,0,0],[0,0,1,2,3,2,2,3,2,1,0,0],
+       [0,1,3,3,2,2,2,2,3,3,1,0],[0,1,2,2,2,2,2,2,2,2,1,0],[0,0,1,2,3,2,2,3,2,1,0,0],
+       [0,0,0,1,2,2,2,1,0,0,0,0],[0,0,0,1,5,0,5,1,0,0,0,0],[0,0,0,1,1,0,1,1,0,0,0,0]],
+    ],
+    work:[
+      [[0,0,0,0,1,1,1,0,0,0,0,0],[0,0,0,1,2,2,2,1,0,0,0,0],[0,0,1,2,2,4,2,2,1,0,0,0],
+       [0,5,5,5,2,2,2,1,0,0,0,0],[0,0,0,1,2,2,2,2,1,0,0,0],[0,0,1,2,3,2,2,3,2,1,0,0],
+       [0,0,1,3,2,2,2,2,3,1,0,0],[0,1,3,2,2,2,2,2,2,3,1,0],[0,0,1,3,3,2,2,3,3,1,0,0],
+       [0,0,0,1,2,2,2,1,0,0,0,0],[0,0,0,1,5,0,5,1,0,0,0,0],[0,0,0,1,1,0,1,1,0,0,0,0]],
+      [[0,0,0,0,1,1,1,0,0,0,0,0],[0,0,0,1,2,2,2,1,0,0,0,0],[0,0,1,2,2,4,2,2,1,0,0,0],
+       [0,0,5,5,2,2,2,1,0,0,0,0],[0,0,0,1,2,2,2,2,1,0,0,0],[0,0,1,2,3,2,2,3,2,1,0,0],
+       [0,1,3,2,2,2,2,2,3,1,0,0],[0,1,2,3,3,2,2,3,3,1,0,0],[0,0,1,2,3,2,2,3,2,1,0,0],
+       [0,0,0,1,2,2,2,1,0,0,0,0],[0,0,0,1,5,0,5,1,0,0,0,0],[0,0,0,1,1,0,1,1,0,0,0,0]],
+    ],
+    sleep:[
+      [[0,0,0,0,1,1,1,0,0,0,0,0],[0,0,0,1,2,2,2,1,0,0,0,0],[0,0,1,2,2,1,2,2,1,0,0,0],
+       [0,0,0,1,2,2,2,2,1,0,0,0],[0,0,0,1,2,2,2,2,1,0,0,0],[0,0,1,2,3,2,2,3,2,1,0,0],
+       [0,1,3,3,2,2,2,2,3,3,1,0],[0,0,1,2,2,2,2,2,2,1,0,0],[0,0,0,1,2,2,2,1,0,0,0,0],
+       [0,0,0,0,1,2,1,0,0,0,0,0],[0,0,0,0,1,2,1,0,0,0,0,0],[0,0,0,0,1,1,1,0,0,0,0,0]],
+    ],
+  },
+  worker:{
+    idle:[
+      [[0,0,0,0,0,1,0,0,0,0,0,0],[0,0,0,0,1,7,1,0,0,0,0,0],[0,0,0,1,2,2,2,1,0,0,0,0],
+       [0,0,1,2,2,2,2,2,1,0,0,0],[0,0,1,2,4,2,4,2,1,0,0,0],[0,0,1,2,4,2,4,2,1,0,0,0],
+       [0,0,1,2,6,6,6,2,1,0,0,0],[0,0,0,1,2,2,2,1,0,0,0,0],[0,1,2,2,2,2,2,2,2,1,0,0],
+       [0,1,2,7,3,3,3,7,2,1,0,0],[0,1,2,2,2,2,2,2,2,1,0,0],[0,0,1,6,1,0,1,6,1,0,0,0]],
+      [[0,0,0,0,0,1,0,0,0,0,0,0],[0,0,0,0,1,7,1,0,0,0,0,0],[0,0,0,1,2,2,2,1,0,0,0,0],
+       [0,0,1,2,2,2,2,2,1,0,0,0],[0,0,1,2,4,5,4,2,1,0,0,0],[0,0,1,2,4,5,4,2,1,0,0,0],
+       [0,0,1,2,6,6,6,2,1,0,0,0],[0,0,0,1,2,2,2,1,0,0,0,0],[0,1,2,2,2,2,2,2,2,1,0,0],
+       [0,1,2,7,3,3,3,7,2,1,0,0],[0,1,2,2,2,2,2,2,2,1,0,0],[0,0,1,6,1,0,1,6,1,0,0,0]],
+    ],
+    work:[
+      [[0,0,0,0,0,1,0,0,0,0,0,0],[0,0,0,0,1,4,1,0,0,0,0,0],[0,0,0,1,2,2,2,1,0,0,0,0],
+       [0,0,1,2,2,2,2,2,1,0,0,0],[0,0,1,2,4,4,4,2,1,0,0,0],[0,0,1,2,4,4,4,2,1,0,0,0],
+       [0,0,1,2,9,9,9,2,1,0,0,0],[0,0,0,1,2,2,2,1,0,0,0,0],[0,1,2,2,9,2,9,2,2,1,0,0],
+       [0,1,9,7,3,3,3,7,9,1,0,0],[0,1,2,2,2,2,2,2,2,1,0,0],[0,0,1,6,1,0,1,6,1,0,0,0]],
+      [[0,0,0,0,0,1,0,0,0,0,0,0],[0,0,0,0,1,4,1,0,0,0,0,0],[0,0,0,1,2,2,2,1,0,0,0,0],
+       [0,0,1,2,2,2,2,2,1,0,0,0],[0,0,1,2,5,4,5,2,1,0,0,0],[0,0,1,2,4,5,4,2,1,0,0,0],
+       [0,0,1,2,9,6,9,2,1,0,0,0],[0,0,0,1,2,2,2,1,0,0,0,0],[0,1,9,2,2,2,2,2,9,1,0,0],
+       [0,1,2,7,3,3,3,7,2,1,0,0],[0,1,2,9,2,2,2,9,2,1,0,0],[0,0,1,6,1,0,1,6,1,0,0,0]],
+    ],
+    sleep:[
+      [[0,0,0,0,0,1,0,0,0,0,0,0],[0,0,0,0,1,1,1,0,0,0,0,0],[0,0,0,1,2,2,2,1,0,0,0,0],
+       [0,0,1,2,2,2,2,2,1,0,0,0],[0,0,1,2,1,2,1,2,1,0,0,0],[0,0,1,2,1,2,1,2,1,0,0,0],
+       [0,0,1,2,6,6,6,2,1,0,0,0],[0,0,0,1,2,2,2,1,0,0,0,0],[0,1,2,2,2,2,2,2,2,1,0,0],
+       [0,1,2,6,3,3,3,6,2,1,0,0],[0,1,2,2,2,2,2,2,2,1,0,0],[0,0,1,6,1,0,1,6,1,0,0,0]],
+    ],
+  },
+};
+
+function getSpriteType(id){
+  if(id==='ciphemon')return'ciphemon';
+  if(id==='hermes')return'hermes';
+  return'worker';
+}
+
+function drawSprite(ctx,grid,x,y,pal){
+  grid.forEach((row,ry)=>row.forEach((c,rx)=>{
+    if(!c)return;
+    ctx.fillStyle=pal[c];
+    ctx.fillRect(x+rx*PX,y+ry*PX,PX,PX);
+  }));
+}
+
+// Speech bubble overlay: {text, until, color}
+const bubbles = {};
+
+function drawScene(canvas,agent,tick){
+  const ctx=canvas.getContext('2d'),W=canvas.width,H=canvas.height;
+  ctx.clearRect(0,0,W,H);
+
+  const online=!!agent.online;
+  const busy=!!(agent.current_task_id);
+  const toolActive=!!(agent._toolActive);
+  const mode=online?(toolActive?'work':busy?'work':'idle'):'sleep';
+
+  // Background gradient
+  const g=ctx.createLinearGradient(0,0,0,H);
+  g.addColorStop(0,'#0f172a');g.addColorStop(1,'#1e293b');
+  ctx.fillStyle=g;ctx.fillRect(0,0,W,H);
+
+  // Floor
+  ctx.fillStyle='#0c0f1a';ctx.fillRect(0,H-18,W,18);
+
+  // Desk
+  const DY=H-22;
+  ctx.fillStyle='#78350f';ctx.fillRect(0,DY,W,5);
+  ctx.fillStyle='#92400e';ctx.fillRect(0,DY,W,2);
+
+  // Monitor (right side)
+  const MX=W-42,MY=DY-32;
+  ctx.fillStyle='#1e293b';ctx.fillRect(MX-2,MY-2,34,28);
+  if(online){
+    const screenC=toolActive?'#7c3aed':busy?'#0369a1':'#0f172a';
+    ctx.fillStyle=screenC;ctx.fillRect(MX,MY,30,22);
+    if(busy||toolActive){
+      for(let i=0;i<4;i++){
+        const w=4+((tick*2+i*9)%18);
+        ctx.fillStyle=toolActive?`rgba(168,85,247,${.6+i*.1})`:`rgba(56,189,248,${.5+i*.1})`;
+        ctx.fillRect(MX+2,MY+2+i*5,w,3);
+      }
+    }else{
+      ctx.fillStyle='#1d4ed8';ctx.fillRect(MX+8,MY+8,14,6);
+    }
+  }else{
+    ctx.fillStyle='#0f172a';ctx.fillRect(MX,MY,30,22);
+  }
+  ctx.fillStyle='#475569';ctx.fillRect(MX+12,MY+22,6,6);
+
+  // Keyboard
+  ctx.fillStyle='#334155';ctx.fillRect(MX-8,DY-5,30,4);
+  if(busy&&tick%2===0){ctx.fillStyle='#64748b';}else{ctx.fillStyle='#475569';}
+  for(let k=0;k<4;k++)ctx.fillRect(MX-6+k*7,DY-4,5,2);
+
+  // Coffee
+  const CX=6,CY=DY-14;
+  ctx.fillStyle='#b45309';ctx.fillRect(CX,CY+4,10,10);
+  ctx.fillStyle='#78350f';ctx.fillRect(CX,CY+4,10,2);
+  ctx.fillStyle='#fef3c7';ctx.fillRect(CX+1,CY+5,8,1);
+  if(online&&!busy){
+    ctx.fillStyle='rgba(255,255,255,.2)';
+    const s=tick%8;
+    ctx.fillRect(CX+3,CY-s,1,3);ctx.fillRect(CX+6,CY-((s+3)%8),1,3);
+  }
+
+  // Papers
+  if(online){
+    ctx.fillStyle='#f1f5f9';ctx.fillRect(22,DY-8,14,10);
+    ctx.fillStyle='#cbd5e1';
+    for(let l=0;l<3;l++)ctx.fillRect(23,DY-6+l*3,8,1);
+  }
+
+  // Sprite — try PNG sheet first, fall back to pixel art
+  const type=getSpriteType(agent.id||'');
+  const rate=mode==='work'?4:mode==='sleep'?20:12;
+  const SX=18,SY=DY-12*PX;
+  const pngState=toolActive?'tool':mode;
+  const pngFrames=(SPRITES[type][pngState]||SPRITES[type].idle).length;
+  const fi=Math.floor(tick/rate)%pngFrames;
+  const usedPNG = spriteLoader.drawFrame(ctx, agent.id||'', pngState, fi, SX, SY);
+  if (!usedPNG) {
+    const frames=SPRITES[type][mode]||SPRITES[type].idle;
+    drawSprite(ctx,frames[fi%frames.length],SX,SY,PAL[type]);
+  }
+
+  // Tool-call aura
+  if(toolActive){
+    const pulse=Math.sin(tick*0.4)*0.25+0.35;
+    ctx.globalAlpha=pulse;
+    ctx.fillStyle='#a855f7';
+    ctx.fillRect(SX-3,SY-3,12*PX+6,12*PX+6);
+    ctx.globalAlpha=1;
+    for(let i=0;i<4;i++){
+      const a=(tick*0.15+i*Math.PI/2)%(Math.PI*2);
+      const px=SX+6*PX+Math.cos(a)*18,py=SY+6*PX+Math.sin(a)*18;
+      ctx.fillStyle='#a855f7';ctx.globalAlpha=.7;
+      ctx.fillRect(px,py,3,3);
+    }
+    ctx.globalAlpha=1;
+  }
+
+  // Speech bubble (A2A)
+  const bub=bubbles[agent.id];
+  if(bub&&Date.now()<bub.until){
+    const bx=SX+12*PX/2,by=SY-4;
+    const txt=bub.text.slice(0,18);
+    ctx.font='bold 7px monospace';
+    const tw=ctx.measureText(txt).width;
+    const bw=tw+10,bh=14;
+    ctx.fillStyle=bub.color||'rgba(6,182,212,.9)';
+    ctx.beginPath();
+    ctx.roundRect(bx-bw/2,by-bh,bw,bh,3);
+    ctx.fill();
+    ctx.fillStyle='#fff';
+    ctx.fillText(txt,bx-bw/2+5,by-5);
+  }
+
+  // ZZZ
+  if(mode==='sleep'){
+    const off=(tick%14)/14;
+    ctx.font='bold 9px monospace';
+    ctx.fillStyle='#94a3b8';ctx.globalAlpha=.8-off*.4;
+    ctx.fillText('z',SX+50,SY+8-off*10);
+    ctx.font='bold 6px monospace';ctx.globalAlpha=.5;
+    ctx.fillText('z',SX+57,SY-off*6);
+    ctx.globalAlpha=1;
+  }
+}
+
+// ════════════════════════════════════════════════════════
+//  PNG SPRITE LOADER  (falls back to pixel art if missing)
+// ════════════════════════════════════════════════════════
+const spriteLoader = {
+  sheets: {},      // id → { img, cfg }
+  agentMap: {},    // agentId → sprite id
+  ready: false,
+
+  async init() {
+    try {
+      const r = await fetch('sprites/sprites.json');
+      if (!r.ok) return;
+      const config = await r.json();
+      this.agentMap = config.agentMap || {};
+
+      const loads = Object.entries(config.sprites || {}).map(([id, cfg]) =>
+        new Promise(resolve => {
+          const img = new Image();
+          img.onload  = () => { this.sheets[id] = { img, cfg }; resolve(); };
+          img.onerror = () => resolve();
+          img.src = cfg.sheet;
+        })
+      );
+      await Promise.all(loads);
+      this.ready = Object.keys(this.sheets).length > 0;
+      if (this.ready) console.log('PNG sprites loaded:', Object.keys(this.sheets).join(', '));
+    } catch(e) { /* fall back to pixel art silently */ }
+  },
+
+  // Returns false if no PNG sheet found (caller uses pixel art fallback)
+  drawFrame(ctx, agentId, state, frameIdx, destX, destY) {
+    const spriteId = this.agentMap[agentId] || this.agentMap['default'] || agentId;
+    const s = this.sheets[spriteId];
+    if (!s) return false;
+
+    const { img, cfg } = s;
+    const stateIdx = ['idle','work','sleep','tool'].indexOf(state);
+    if (stateIdx < 0) return false;
+    const stateCfg = cfg.states[state];
+    if (!stateCfg) return false;
+
+    const frames = stateCfg.frames || 1;
+    const col    = frameIdx % frames;
+    const fw = cfg.frameWidth  || 48;
+    const fh = cfg.frameHeight || 48;
+    const sc = cfg.scale || 1;
+
+    ctx.drawImage(img,
+      col * fw, stateIdx * fh, fw, fh,
+      destX, destY, fw * sc, fh * sc);
+    return true;
+  }
+};
+spriteLoader.init();
+
+// roundRect polyfill for older Chrome/Edge
+if (!CanvasRenderingContext2D.prototype.roundRect) {
+  CanvasRenderingContext2D.prototype.roundRect = function(x,y,w,h,r){
+    this.beginPath();
+    this.moveTo(x+r,y);this.lineTo(x+w-r,y);this.arcTo(x+w,y,x+w,y+r,r);
+    this.lineTo(x+w,y+h-r);this.arcTo(x+w,y+h,x+w-r,y+h,r);
+    this.lineTo(x+r,y+h);this.arcTo(x,y+h,x,y+h-r,r);
+    this.lineTo(x,y+r);this.arcTo(x,y,x+r,y,r);
+    this.closePath();
+  };
+}
+
+// ── Canvas animation loop ──────────────────────────────────────────────
+const canvasMap={};
+let tick=0;
+(function loop(){
+  tick++;
+  Object.values(canvasMap).forEach(({canvas,agentRef})=>{
+    if(canvas.isConnected)drawScene(canvas,agentRef,tick);
+    else{const k=Object.keys(canvasMap).find(k=>canvasMap[k].canvas===canvas);if(k)delete canvasMap[k];}
+  });
+  requestAnimationFrame(loop);
+})();
+
+// ════════════════════════════════════════════════════════
+//  LIVE FEED
+// ════════════════════════════════════════════════════════
+const MAX_FEED_ITEMS=200;
+const feedItems=[];
+let feedFilter='';
+let lastFeedId=0;
+let sseConnected=false;
+let sseSource=null;
+
+const EV_META={
+  task_created: {icon:'⬡', label:'created'},
+  task_claimed:  {icon:'▶', label:'claimed'},
+  task_done:     {icon:'✓', label:'done'},
+  task_failed:   {icon:'✗', label:'failed'},
+  task_retry:    {icon:'↺', label:'retry'},
+  task_progress: {icon:'…', label:'progress'},
+  a2a_send:      {icon:'↔', label:'A2A'},
+  tool_call:     {icon:'⚙', label:'tool'},
+  tool_result:   {icon:'⚙', label:'tool done'},
+  agent_online:  {icon:'●', label:'online'},
+  agent_offline: {icon:'○', label:'offline'},
+  proxy_start:   {icon:'⤷', label:'proxy'},
+};
+
+function connectSSE(){
+  if(sseSource)sseSource.close();
+  sseSource=new EventSource(`/events?since_id=${lastFeedId}`);
+  sseSource.onopen=()=>{sseConnected=true;setConn('SSE','');};
+  sseSource.onerror=()=>{sseConnected=false;setConn('POLL','polling');sseSource.close();setTimeout(pollFeed,3000);};
+  sseSource.onmessage=ev=>{try{ingestEvent(JSON.parse(ev.data));}catch(e){}};
+}
+
+async function pollFeed(){
+  if(sseConnected)return;
+  try{
+    const r=await fetch(`/feed?since_id=${lastFeedId}&limit=40`);
+    if(r.ok){
+      const evts=await r.json();
+      evts.forEach(ingestEvent);
+      setConn('POLL','polling');
+    }
+  }catch(e){setConn('OFF','offline');}
+  setTimeout(pollFeed,3000);
+}
+
+function setConn(label,cls){
+  const el=document.getElementById('conn-badge');
+  el.textContent=label;el.className='';
+  if(cls)el.classList.add(cls);
+}
+
+function ingestEvent(ev){
+  if(ev.id&&ev.id>lastFeedId)lastFeedId=ev.id;
+  feedItems.push(ev);
+  if(feedItems.length>MAX_FEED_ITEMS)feedItems.shift();
+  renderFeedItem(ev);
+
+  // Update agent tool-active state
+  if(ev.event_type==='tool_call'&&ev.source){
+    const ref=canvasMap[ev.source];
+    if(ref){ref.agentRef._toolActive=true;setTimeout(()=>{ref.agentRef._toolActive=false;},4000);}
+  }
+  // Speech bubble on A2A
+  if(ev.event_type==='a2a_send'){
+    const payload=ev.details||{};
+    const mt=payload.message_type||'msg';
+    const txt=`${mt}`;
+    if(ev.source)bubbles[ev.source]={text:txt,until:Date.now()+3500,color:'rgba(6,182,212,.9)'};
+    if(ev.target)bubbles[ev.target]={text:txt,until:Date.now()+3500,color:'rgba(168,85,247,.9)'};
+  }
+  // Refresh agents/tasks on key events
+  if(['task_done','task_failed','task_claimed','agent_online','agent_offline'].includes(ev.event_type)){
+    loadAgents();loadTasks();
+  }
+}
+
+function renderFeedItem(ev){
+  const filter=feedFilter;
+  if(filter==='task'&&!ev.event_type.startsWith('task'))return;
+  if(filter==='a2a'&&ev.event_type!=='a2a_send')return;
+  if(filter==='tool'&&!ev.event_type.startsWith('tool'))return;
+
+  const meta=EV_META[ev.event_type]||{icon:'·',label:ev.event_type};
+  const ts=ev.timestamp?new Date(ev.timestamp).toLocaleTimeString(undefined,{hour:'2-digit',minute:'2-digit',second:'2-digit'}):'';
+  const d=ev.details||{};
+  let desc='';
+  switch(ev.event_type){
+    case'task_created':desc=`<span class="ev-desc">${d.type||''} p${d.priority||1}</span>`;break;
+    case'task_claimed':desc=`<span class="ev-desc">claimed ${d.type||''} <code>${(ev.task_id||'').slice(0,8)}</code></span>`;break;
+    case'task_done':desc=`<span class="ev-desc">done <code>${(ev.task_id||'').slice(0,8)}</code></span>`;break;
+    case'task_failed':desc=`<span class="ev-desc" style="color:var(--red)">${(d.error||'').slice(0,60)}</span>`;break;
+    case'task_retry':desc=`<span class="ev-desc">retry ${d.retries}/${d.max}</span>`;break;
+    case'task_progress':desc=`<span class="ev-desc">${(d.log||d.progress||'').slice(0,80)}</span>`;break;
+    case'a2a_send':desc=`<span class="ev-desc">→ <strong>${ev.target||'all'}</strong> <em>${d.message_type||''}</em></span>`;break;
+    case'tool_call':desc=`<span class="ev-desc">⚙ <strong>${d.tool||''}</strong> ${JSON.stringify(d.input||{}).slice(0,50)}</span>`;break;
+    case'tool_result':desc=`<span class="ev-desc">${d.success?'✓':'✗'} <strong>${d.tool||''}</strong> ${d.duration_ms||0}ms</span>`;break;
+    case'agent_online':desc=`<span class="ev-desc">came online</span>`;break;
+    case'agent_offline':desc=`<span class="ev-desc">went offline</span>`;break;
+    case'proxy_start':desc=`<span class="ev-desc">SSH → ${ev.target||'?'}</span>`;break;
+    default:desc=`<span class="ev-desc">${JSON.stringify(d).slice(0,60)}</span>`;
+  }
+
+  const who=ev.source||ev.event_type;
+  const el=document.createElement('div');
+  el.className=`ev ev-${ev.event_type}`;
+  el.innerHTML=`<div class="ev-time">${ts}</div><div class="ev-icon">${meta.icon}</div><div class="ev-body"><span class="ev-who">${who}</span>${desc}</div>`;
+  if(ev.task_id)el.onclick=()=>showTask(ev.task_id);
+
+  const scroll=document.getElementById('feed-scroll');
+  const empty=scroll.querySelector('.feed-empty');
+  if(empty)empty.remove();
+  scroll.appendChild(el);
+  // auto-scroll if near bottom
+  if(scroll.scrollHeight-scroll.scrollTop-scroll.clientHeight<80)
+    scroll.scrollTop=scroll.scrollHeight;
+  // trim DOM
+  while(scroll.children.length>MAX_FEED_ITEMS)scroll.removeChild(scroll.firstChild);
+}
+
+function applyFeedFilter(){
+  feedFilter=document.getElementById('feed-filter').value;
+  const scroll=document.getElementById('feed-scroll');
+  scroll.innerHTML='';
+  feedItems.forEach(renderFeedItem);
+}
+
+function clearFeed(){
+  feedItems.length=0;
+  document.getElementById('feed-scroll').innerHTML='<div class="feed-empty">Feed cleared.</div>';
+}
+
+// ════════════════════════════════════════════════════════
+//  AGENTS
+// ════════════════════════════════════════════════════════
+
+// Shown whenever the coordinator is unreachable / no agents registered yet
+const DEMO_AGENTS = [
+  {id:'ciphemon', hostname:'macbook.local', tailscale_ip:'100.x.x.x',
+   capabilities:'["python","embeddings","crosswalk","macos"]',
+   online:1, current_task_id:null, _demo:true},
+  {id:'hermes',   hostname:'hermes-wsl',   tailscale_ip:'100.113.198.30',
+   capabilities:'["python","ssh","git","coordinator"]',
+   online:1, current_task_id:'7f3a9c21-busy', _demo:true},
+  {id:'jetson',   hostname:'jetson-nano',  tailscale_ip:'10.0.0.121',
+   capabilities:'["gpu","fhir","validate"]',
+   online:0, current_task_id:null, _demo:true},
+];
+
+// Seed a few demo feed events once so the feed panel isn't empty
+let _demoFeedSeeded = false;
+function seedDemoFeed(){
+  if(_demoFeedSeeded)return; _demoFeedSeeded=true;
+  const evts=[
+    {id:-1,event_type:'agent_online',  source:'ciphemon',timestamp:new Date(Date.now()-60000).toISOString(),details:{}},
+    {id:-2,event_type:'agent_online',  source:'hermes',  timestamp:new Date(Date.now()-55000).toISOString(),details:{}},
+    {id:-3,event_type:'task_created',  source:null,      timestamp:new Date(Date.now()-40000).toISOString(),task_id:'7f3a9c21',details:{type:'expand_ontology',priority:2}},
+    {id:-4,event_type:'task_claimed',  source:'ciphemon',timestamp:new Date(Date.now()-38000).toISOString(),task_id:'7f3a9c21',details:{type:'expand_ontology'}},
+    {id:-5,event_type:'tool_call',     source:'ciphemon',timestamp:new Date(Date.now()-35000).toISOString(),task_id:'7f3a9c21',details:{tool:'load_loinc',input:{source:'loinc_db'},status:'started'}},
+    {id:-6,event_type:'a2a_send',      source:'ciphemon',target:'hermes',timestamp:new Date(Date.now()-30000).toISOString(),details:{message_type:'status_update',payload_preview:'{progress:50}'}},
+    {id:-7,event_type:'tool_result',   source:'ciphemon',timestamp:new Date(Date.now()-28000).toISOString(),task_id:'7f3a9c21',details:{tool:'load_loinc',duration_ms:1820,success:true}},
+    {id:-8,event_type:'tool_call',     source:'ciphemon',timestamp:new Date(Date.now()-20000).toISOString(),task_id:'7f3a9c21',details:{tool:'embed_texts',input:{n:4200},status:'started'}},
+    {id:-9,event_type:'task_progress', source:'ciphemon',timestamp:new Date(Date.now()-10000).toISOString(),task_id:'7f3a9c21',details:{log:'embedded 4200/4200 terms'}},
+  ];
+  evts.forEach(e=>{feedItems.push(e);renderFeedItem(e);});
+}
+
+async function loadAgents(){
+  let agents=await fetchJSON('/agents')||[];
+  const isDemo=agents.length===0;
+  if(isDemo){agents=DEMO_AGENTS;seedDemoFeed();}
+
+  // health bar
+  const h=await fetchJSON('/health');
+  if(h)document.getElementById('health-info').textContent=`${h.agents_online} online · ${h.queue_depth} queued`;
+  else if(isDemo)document.getElementById('health-info').textContent='demo mode — no backend';
+
+  const list=document.getElementById('agents-list');
+  if(!agents.length){list.innerHTML='<div style="color:var(--muted);font-size:.8rem;padding:4px">No agents registered</div>';return;}
+
+  agents.forEach(a=>{
+    let card=document.getElementById(`card-${a.id}`);
+    const online=!!a.online;
+    const caps=JSON.parse(a.capabilities||'[]').join(', ')||'—';
+    if(!card){
+      card=document.createElement('div');
+      card.id=`card-${a.id}`;
+      card.className='agent-card';
+      const demoTag=a._demo?`<span style="font-size:.6rem;color:var(--muted);background:var(--border);padding:1px 4px;border-radius:3px;margin-left:4px">DEMO</span>`:'';
+      card.innerHTML=`
+        <canvas class="agent-canvas" id="canvas-${a.id}" width="214" height="100"></canvas>
+        <div class="agent-meta">
+          <div class="agent-name">
+            <span class="dot ${online?'dot-on':'dot-off'}" id="dot-${a.id}"></span>
+            <span>${a.id}</span>${demoTag}
+          </div>
+          <div class="agent-caps" id="caps-${a.id}">${caps}</div>
+          <div class="agent-curtask" id="ctask-${a.id}"></div>
+        </div>`;
+      list.appendChild(card);
+      const canvas=document.getElementById(`canvas-${a.id}`);
+      const ref={...a,_toolActive:!!(a._demo && a.current_task_id)};
+      canvasMap[a.id]={canvas,agentRef:ref};
+    }else{
+      const existing=canvasMap[a.id];
+      if(existing)Object.assign(existing.agentRef,{...a});
+      document.getElementById(`dot-${a.id}`).className=`dot ${online?'dot-on':'dot-off'}`;
+      document.getElementById(`caps-${a.id}`).textContent=caps;
+    }
+    const ctask=document.getElementById(`ctask-${a.id}`);
+    if(ctask)ctask.textContent=a.current_task_id?`▶ ${a.current_task_id.slice(0,12)}…`:'';
+  });
+}
+
+// ════════════════════════════════════════════════════════
+//  TASKS
+// ════════════════════════════════════════════════════════
+const BADGE={pending:'bp',claimed:'bc',running:'br',done:'bd',failed:'bf'};
+
+async function loadTasks(){
+  const status=document.getElementById('task-filter').value;
+  const qs=status?`status=${status}`:'';
+  const tasks=await fetchJSON('/tasks?'+qs)||[];
+  const scroll=document.getElementById('task-scroll');
+  if(!tasks.length){
+    scroll.innerHTML='<div style="color:var(--muted);font-size:.78rem;padding:14px">No tasks</div>';
+    return;
+  }
+  scroll.innerHTML=tasks.slice(0,60).map(t=>`
+    <div class="task-row" onclick="showTask('${t.id}')">
+      <div class="task-row-top">
+        <span class="task-type">${t.type}</span>
+        <span class="badge ${BADGE[t.status]||'bp'}">${t.status}</span>
+      </div>
+      <div style="display:flex;justify-content:space-between">
+        <span class="task-id">${t.id.slice(0,8)}…</span>
+        <span class="task-agent">${t.assigned_to||'—'}</span>
+      </div>
+    </div>`).join('');
+}
+
+async function showTask(id){
+  if(!id)return;
+  const t=await fetchJSON(`/tasks/${id}`);
+  if(!t)return;
+  const payload=()=>{try{return JSON.stringify(JSON.parse(t.payload),null,2);}catch{return t.payload||'{}'}};
+  const log=(t.log||[]).map(l=>`<div class="mlog">${l.timestamp||''} <strong>${l.event}</strong>${l.agent_id?' '+l.agent_id:''}${l.details?' — '+l.details:''}</div>`).join('')||'<div class="mlog" style="color:var(--muted)">No entries</div>';
+  document.getElementById('modal-title').textContent=`${t.type} · ${t.id.slice(0,8)}`;
+  document.getElementById('modal-body').innerHTML=`
+    <div class="mf"><label>Status / Agent</label><span class="badge ${BADGE[t.status]||'bp'}">${t.status}</span> ${t.assigned_to||'unassigned'}</div>
+    <div class="mf"><label>Created</label>${t.created_at||'—'}</div>
+    <div class="mf"><label>Payload</label><pre>${payload()}</pre></div>
+    ${t.result_artifact?`<div class="mf"><label>Result</label><pre>${(()=>{try{return JSON.stringify(JSON.parse(t.result_artifact),null,2);}catch{return t.result_artifact;}})()}</pre></div>`:''}
+    ${t.error?`<div class="mf"><label>Error</label><pre style="color:var(--red)">${t.error}</pre></div>`:''}
+    <div class="mf"><label>Event Log</label>${log}</div>`;
+  document.getElementById('modal-bg').classList.add('open');
+}
+
+function closeModal(e){
+  if(!e||e.target===document.getElementById('modal-bg'))
+    document.getElementById('modal-bg').classList.remove('open');
+}
+
+// ════════════════════════════════════════════════════════
+//  SUBMIT
+// ════════════════════════════════════════════════════════
+function openSubmit(){document.getElementById('submit-bg').classList.add('open');}
+function closeSubmit(e){
+  if(!e||e.target===document.getElementById('submit-bg'))
+    document.getElementById('submit-bg').classList.remove('open');
+}
+async function submitTask(){
+  const type=document.getElementById('new-type').value;
+  const priority=parseInt(document.getElementById('new-priority').value)||1;
+  const target=document.getElementById('new-target').value.trim()||undefined;
+  let payload;
+  try{payload=JSON.parse(document.getElementById('new-payload').value||'{}');}
+  catch{document.getElementById('submit-msg').textContent='Invalid JSON';return;}
+  const body={type,priority,payload};
+  if(target)body.target_machine=target;
+  const r=await fetch('/tasks',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  const msg=document.getElementById('submit-msg');
+  if(r.ok){
+    const t=await r.json();
+    msg.style.color='var(--green)';msg.textContent=`Submitted ${t.id.slice(0,8)}`;
+    loadTasks();setTimeout(()=>closeSubmit(),1200);
+  }else{msg.style.color='var(--red)';msg.textContent=`Failed (${r.status})`;}
+}
+
+// ════════════════════════════════════════════════════════
+//  UTILS
+// ════════════════════════════════════════════════════════
+async function fetchJSON(path){
+  try{const r=await fetch(path);return r.ok?r.json():null;}
+  catch{return null;}
+}
+function hardRefresh(){loadAgents();loadTasks();}
+
+// ── Bootstrap ──────────────────────────────────────────
+loadAgents();
+loadTasks();
+connectSSE();
+setInterval(()=>{loadAgents();loadTasks();},12000);
+</script>
+</body>
+</html>
