@@ -7,16 +7,43 @@ from typing import Optional
 logger = logging.getLogger(__name__)
 
 MACHINES = {
-    "jetson": {"host": "10.0.0.121", "user": "jetson"},
-    "dgx_primary": {"host": "100.72.65.100", "user": "syeung"},
-    "dgx_secondary": {"host": "100.99.1.84", "user": "syeung"},
+    "jetson": {
+        "host": "10.0.0.121",
+        "user": "jetson",
+        "key": "~/.ssh/id_ed25519_openclaw",
+    },
+    "dgx_primary": {
+        "host": "100.72.65.100",
+        "user": "syeung",
+        "key": "~/.ssh/id_ed25519_dgx",
+    },
+    "dgx_secondary": {
+        "host": "100.99.1.84",
+        "user": "syeung",
+        "key": "~/.ssh/id_ed25519_dgx",
+    },
 }
 
 SSH_OPTS = [
     "-o", "StrictHostKeyChecking=no",
     "-o", "BatchMode=yes",
     "-o", "ConnectTimeout=15",
+    "-o", "ServerAliveInterval=60",
 ]
+
+# ── Task handler map: task_type → (script_path, venv?) ──────────────
+TASK_SCRIPTS = {
+    "expand_ontology": None,  # handled by Ciphemon agent, not proxy
+    "ontology_validate": ("~/LISA_FTM/scripts/validate_crosswalk_v2.py", True),
+    "ontology_quality_check": ("~/LISA_FTM/scripts/test_phase_b_ontology.py", True),
+    "fhir_generate": None,  # placeholder until Synthea pipeline is set up
+    "fhir_validate": ("~/LISA_FTM/scripts/validate_crosswalk_v2.py", True),
+    "fhir_bundle_clean": None,  # SSH rm -rf handled inline
+    "llm_finetune": None,  # placeholder
+    "model_eval": ("~/LISA_FTM/scripts/test_phase_b_ontology.py", True),
+    "model_export": None,
+    "render_3d": None,
+}
 
 
 class WorkerProxy:
@@ -31,7 +58,11 @@ class WorkerProxy:
             }
 
         target = f"{machine['user']}@{machine['host']}"
-        cmd = ["ssh"] + SSH_OPTS + [target, command]
+        key = machine.get("key")
+        cmd = ["ssh"] + SSH_OPTS
+        if key:
+            cmd += ["-i", key]
+        cmd += [target, command]
 
         start = time.monotonic()
         try:
@@ -79,13 +110,26 @@ class WorkerProxy:
 
     def run_task(self, machine_id: str, task_type: str,
                  payload: dict, timeout: int = 300) -> tuple[bool, dict]:
-        command = self._build_command(task_type, payload)
+        command = self._build_command(machine_id, task_type, payload)
         raw = self.run(machine_id, command, timeout)
         return self.parse_result(raw)
 
-    def _build_command(self, task_type: str, payload: dict) -> str:
-        payload_json = json.dumps(payload).replace("'", "'\\''")
-        return f"python3 -m digi_worker run '{task_type}' '{payload_json}'"
+    def _build_command(self, machine_id: str, task_type: str, payload: dict) -> str:
+        payload_json = json.dumps(payload, separators=(',', ':')).replace("'", "\\'")
+
+        entry = TASK_SCRIPTS.get(task_type)
+        if entry is None:
+            # fallback — generic digi_worker (placeholder for now)
+            return f"python3 -m digi_worker run '{task_type}' '{payload_json}'"
+
+        script_path, use_venv = entry
+
+        # build python invocation
+        python = "~/LISA_FTM/.venv/bin/python3" if use_venv else "python3"
+        flags = ""
+        for key, val in payload.items():
+            flags += f" --{key} '{str(val).replace(chr(39), chr(92)+chr(39))}'"
+        return f"{python} {script_path}{flags}"
 
 
 proxy = WorkerProxy()
