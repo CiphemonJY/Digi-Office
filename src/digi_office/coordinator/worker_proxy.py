@@ -28,7 +28,8 @@ SSH_OPTS = [
     "-o", "StrictHostKeyChecking=no",
     "-o", "BatchMode=yes",
     "-o", "ConnectTimeout=15",
-    "-o", "ServerAliveInterval=60",
+    "-o", "ServerAliveInterval=30",
+    "-o", "ServerAliveCountMax=2",  # kill after 2 missed alive messages (~60s)
 ]
 
 # ── Task handler map: task_type → (script_path, venv?) ──────────────
@@ -59,7 +60,9 @@ class WorkerProxy:
 
         target = f"{machine['user']}@{machine['host']}"
         key = machine.get("key")
-        cmd = ["ssh"] + SSH_OPTS
+        
+        # Wrap ssh with timeout to prevent indefinite hangs
+        cmd = ["timeout", str(timeout)] + ["ssh"] + SSH_OPTS
         if key:
             cmd += ["-i", key]
         cmd += [target, command]
@@ -99,7 +102,11 @@ class WorkerProxy:
     def parse_result(self, raw: dict) -> tuple[bool, dict]:
         """Returns (success, result_payload)."""
         if raw["exit_code"] != 0:
-            return False, {"error": raw["stderr"] or f"exit code {raw['exit_code']}"}
+            err = raw["stderr"] or f"exit code {raw['exit_code']}"
+            # timeout command returns 124 when it kills a hung process
+            if raw["exit_code"] == 124:
+                err = f"SSH command timed out after {raw.get('duration_ms', 0)//1000}s"
+            return False, {"error": err}
 
         stdout = raw["stdout"].strip()
         try:
