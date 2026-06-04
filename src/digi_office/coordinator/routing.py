@@ -33,8 +33,8 @@ ROUTING_TABLE = {
         "proxy": True,
     },
     "fhir_bundle_clean": {
-        "default": "jetson",
-        "fallback": "hermes",
+        "default": "dgx_primary",
+        "fallback": "dgx_secondary",
         "required_capabilities": [],
         "proxy": True,
     },
