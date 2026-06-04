@@ -120,7 +120,7 @@ class WorkerProxy:
         entry = TASK_SCRIPTS.get(task_type)
         if entry is None:
             # fallback — generic digi_worker (placeholder for now)
-            return f"python3 -m digi_worker run '{task_type}' '{payload_json}'"
+            return f"cd ~/LISA_FTM \u0026\u0026 python3 -m digi_worker run '{task_type}' '{payload_json}'"
 
         script_path, use_venv = entry
 
@@ -129,7 +129,7 @@ class WorkerProxy:
         flags = ""
         for key, val in payload.items():
             flags += f" --{key} '{str(val).replace(chr(39), chr(92)+chr(39))}'"
-        return f"{python} {script_path}{flags}"
+        return f"cd ~/LISA_FTM \u0026\u0026 {python} {script_path}{flags}"
 
 
 proxy = WorkerProxy()
