@@ -1,0 +1,17 @@
+[Unit]
+Description=Hermes Digi-Office Agent
+After=network.target digi-office.service
+
+[Service]
+Type=simple
+WorkingDirectory=%h/digi_office
+ExecStart=%h/.local/bin/python3 deploy/hermes_agent.py
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+Environment=PYTHONPATH=%h/digi_office
+Environment=DIGI_COORDINATOR=http://127.0.0.1:8080
+
+[Install]
+WantedBy=default.target
