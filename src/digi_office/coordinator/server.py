@@ -50,6 +50,7 @@ class TaskSubmit(BaseModel):
     required_capabilities: list = []
     target_machine: Optional[str] = None
     project: str = "LISA_FTM"
+    max_retries: Optional[int] = None
 
 
 class HeartbeatPayload(BaseModel):
@@ -127,6 +128,7 @@ def submit_task(body: TaskSubmit):
     return create_task(
         type_=body.type, payload=body.payload, priority=body.priority,
         required_capabilities=caps, target_machine=target, project=body.project,
+        max_retries=body.max_retries,
     )
 
 

@@ -181,18 +181,23 @@ def log_event(conn: sqlite3.Connection, task_id: str, event: str,
 
 def create_task(type_: str, payload: dict, priority: int = 1,
                 required_capabilities: list = None, target_machine: str = None,
-                project: str = "LISA_FTM") -> dict:
+                project: str = "LISA_FTM", max_retries: Optional[int] = None) -> dict:
     task_id = str(uuid.uuid4())
     conn = get_conn()
+    cols = ["id", "type", "project", "priority", "payload", "required_capabilities",
+            "status", "created_at", "target_machine"]
+    vals = [task_id, type_, project, priority,
+            json.dumps(payload),
+            json.dumps(required_capabilities or []),
+            "pending", now_iso(), target_machine]
+    if max_retries is not None:
+        cols.append("max_retries")
+        vals.append(max_retries)
     conn.execute(
-        """INSERT INTO tasks
-           (id, type, project, priority, payload, required_capabilities,
-            status, created_at, target_machine)
-           VALUES (?,?,?,?,?,?,?,?,?)""",
-        (task_id, type_, project, priority,
-         json.dumps(payload),
-         json.dumps(required_capabilities or []),
-         "pending", now_iso(), target_machine),
+        f"""INSERT INTO tasks
+           ({','.join(cols)})
+           VALUES ({','.join('?' * len(cols))})""",
+        vals,
     )
     log_event(conn, task_id, "created")
     conn.commit()
