@@ -63,7 +63,7 @@ class CompletePayload(BaseModel):
 
 
 class FailPayload(BaseModel):
-    error: str
+    error: str = ""
 
 
 class TaskHeartbeat(BaseModel):
