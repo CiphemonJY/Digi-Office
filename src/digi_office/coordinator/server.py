@@ -5,7 +5,7 @@ from contextlib import asynccontextmanager
 from typing import Optional
 
 from fastapi import FastAPI, HTTPException, Query, Request
-from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel
 
 from .db import (
@@ -140,12 +140,12 @@ def claim_task_endpoint(
     caps = json.loads(capabilities)
     task = claim_task(agent_id=agent_id, capabilities=caps)
     if not task:
-        return JSONResponse(status_code=204, content=None)
+        return Response(status_code=204)
 
     route = resolve_route(task["type"])
     if route.get("proxy") and task.get("target_machine"):
         _dispatch_proxy_task(task)
-        return JSONResponse(status_code=204, content=None)
+        return Response(status_code=204)
 
     return task
 
