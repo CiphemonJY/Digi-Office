@@ -15,6 +15,7 @@ from .db import (
     send_a2a_message, get_a2a_inbox, ack_a2a_message, get_a2a_recent,
     log_tool_call, log_tool_result, list_dlq, get_dlq_entry,
     requeue_from_dlq, release_task, reclaim_stale_tasks,
+    get_task_attempts,
 )
 from .routing import resolve_route
 from .worker_proxy import proxy
@@ -66,6 +67,7 @@ class CompletePayload(BaseModel):
 
 class FailPayload(BaseModel):
     error: str = ""
+    agent_id: Optional[str] = None
 
 
 class TaskHeartbeat(BaseModel):
@@ -138,6 +140,48 @@ def list_tasks_endpoint(
     return list_tasks(status=status, agent_id=agent, type_=type, limit=limit)
 
 
+# ── DLQ endpoints must precede /tasks/{task_id} to avoid shadowing ─────
+
+@app.get("/tasks/dlq")
+def get_dlq(limit: int = Query(100)):
+    """List all dead-lettered tasks."""
+    return list_dlq(limit=limit)
+
+
+@app.get("/dlq")
+def get_dlq_alias(limit: int = Query(100)):
+    """Backward-compatible alias for DLQ list."""
+    return list_dlq(limit=limit)
+
+
+@app.get("/tasks/dlq/{original_task_id}")
+def get_dlq_entry_endpoint(original_task_id: str):
+    """Get a single DLQ entry by original task ID."""
+    entry = get_dlq_entry(original_task_id)
+    if not entry:
+        raise HTTPException(404, "DLQ entry not found")
+    return entry
+
+
+@app.post("/tasks/dlq/{original_task_id}/requeue")
+def requeue_dlq(original_task_id: str, body: Optional[RequeuePayload] = None):
+    """Requeue a dead-lettered task as a new pending task."""
+    result = requeue_from_dlq(original_task_id,
+                              max_retries=body.max_retries if body else None)
+    if not result.get("ok"):
+        raise HTTPException(404, result.get("error", "DLQ entry not found"))
+    return result
+
+
+@app.post("/dlq/{dlq_id}/recover")
+def recover_dlq_endpoint(dlq_id: str):
+    """Backward-compatible alias for DLQ requeue."""
+    result = requeue_from_dlq(dlq_id)
+    if not result.get("ok"):
+        raise HTTPException(404, result.get("error", "DLQ entry not found"))
+    return result
+
+
 @app.get("/tasks/claim")
 def claim_task_endpoint(
     agent_id: str = Query(...),
@@ -165,6 +209,14 @@ def get_task_endpoint(task_id: str):
     return task
 
 
+@app.get("/tasks/{task_id}/attempts")
+def task_attempts_endpoint(task_id: str):
+    task = get_task(task_id)
+    if not task:
+        raise HTTPException(404, "Task not found")
+    return {"task_id": task_id, "attempts": get_task_attempts(task_id)}
+
+
 @app.post("/tasks/{task_id}/heartbeat")
 def task_heartbeat(task_id: str, body: TaskHeartbeat):
     task = get_task(task_id)
@@ -187,50 +239,10 @@ def complete_task_endpoint(task_id: str, body: CompletePayload):
 
 @app.post("/tasks/{task_id}/fail")
 def fail_task_endpoint(task_id: str, body: FailPayload):
-    task = fail_task(task_id, body.error)
+    task = fail_task(task_id, body.error, agent_id=body.agent_id)
     if not task:
         raise HTTPException(404, "Task not found")
     return task
-
-
-@app.post("/tasks/{task_id}/tool_call")
-def task_tool_call(task_id: str, body: ToolCallStart):
-    log_id = log_tool_call(body.agent_id, task_id, body.tool_name, body.tool_input)
-    return {"ok": True, "log_id": log_id}
-
-
-@app.post("/tasks/{task_id}/tool_result")
-def task_tool_result(task_id: str, body: ToolCallResult):
-    log_tool_result(body.agent_id, task_id, body.tool_name,
-                    body.tool_output, body.duration_ms, body.success)
-    return {"ok": True}
-
-
-# ── Dead Letter Queue ───────────────────────────────────────────────────────
-
-@app.get("/tasks/dlq")
-def get_dlq(limit: int = Query(100)):
-    """List all dead-lettered tasks."""
-    return list_dlq(limit=limit)
-
-
-@app.get("/tasks/dlq/{original_task_id}")
-def get_dlq_entry_endpoint(original_task_id: str):
-    """Get a single DLQ entry by original task ID."""
-    entry = get_dlq_entry(original_task_id)
-    if not entry:
-        raise HTTPException(404, "DLQ entry not found")
-    return entry
-
-
-@app.post("/tasks/dlq/{original_task_id}/requeue")
-def requeue_dlq(original_task_id: str, body: Optional[RequeuePayload] = None):
-    """Requeue a dead-lettered task as a new pending task."""
-    result = requeue_from_dlq(original_task_id,
-                              max_retries=body.max_retries if body else None)
-    if not result.get("ok"):
-        raise HTTPException(404, result.get("error", "DLQ entry not found"))
-    return result
 
 
 @app.post("/tasks/{task_id}/release")
@@ -243,6 +255,18 @@ def release_task_endpoint(task_id: str):
     if not task:
         raise HTTPException(404, "Task not found or not in claimed/running state")
     return task
+
+@app.post("/tasks/{task_id}/tool_call")
+def task_tool_call(task_id: str, body: ToolCallStart):
+    log_id = log_tool_call(body.agent_id, task_id, body.tool_name, body.tool_input)
+    return {"ok": True, "log_id": log_id}
+
+
+@app.post("/tasks/{task_id}/tool_result")
+def task_tool_result(task_id: str, body: ToolCallResult):
+    log_tool_result(body.agent_id, task_id, body.tool_name,
+                    body.tool_output, body.duration_ms, body.success)
+    return {"ok": True}
 
 
 # ── Agents ─────────────────────────────────────────────────────────────

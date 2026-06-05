@@ -89,6 +89,21 @@ def init_db():
             details TEXT
         );
 
+        -- Task attempt history (per-try audit trail)
+        CREATE TABLE IF NOT EXISTS task_attempts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            task_id TEXT NOT NULL,
+            attempt_number INTEGER NOT NULL,
+            agent_id TEXT,
+            started_at TEXT,
+            ended_at TEXT,
+            status TEXT CHECK(status IN ('started','completed','failed')) DEFAULT 'started',
+            error TEXT,
+            result_artifact TEXT,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE INDEX IF NOT EXISTS idx_task_attempts_task ON task_attempts(task_id, attempt_number);
+
         -- Dead Letter Queue: tasks that exhausted all retries
         CREATE TABLE IF NOT EXISTS dead_letter (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -218,7 +233,7 @@ def claim_task(agent_id: str, capabilities: list) -> Optional[dict]:
         conn.execute("BEGIN IMMEDIATE")
         # Fetch all pending tasks ordered by priority, then find first with matching caps
         rows = conn.execute("""
-            SELECT id, type, payload, required_capabilities, target_machine
+            SELECT id, type, payload, required_capabilities, target_machine, retries
             FROM tasks
             WHERE status = 'pending'
               AND (scheduled_at IS NULL OR scheduled_at <= datetime('now'))
@@ -239,6 +254,12 @@ def claim_task(agent_id: str, capabilities: list) -> Optional[dict]:
                 continue  # Race — someone else claimed it
 
             log_event(conn, row["id"], "claimed", agent_id)
+            # Log attempt start
+            conn.execute(
+                """INSERT INTO task_attempts (task_id, attempt_number, agent_id, started_at, status)
+                   VALUES (?,?,?,?,?)""",
+                (row["id"], row["retries"] + 1, agent_id, now_iso(), "started"),
+            )
             conn.execute("COMMIT")
 
             task_row = conn.execute("SELECT * FROM tasks WHERE id=?", (row["id"],)).fetchone()
@@ -268,6 +289,16 @@ def complete_task(task_id: str, result_artifact: str = None,
         )
         conn.execute("UPDATE agents SET current_task_id=NULL WHERE current_task_id=?", (task_id,))
         log_event(conn, task_id, "completed")
+        # Mark active attempt as completed
+        row = conn.execute(
+            "SELECT id FROM task_attempts WHERE task_id=? AND status='started' ORDER BY attempt_number DESC LIMIT 1",
+            (task_id,),
+        ).fetchone()
+        if row:
+            conn.execute(
+                "UPDATE task_attempts SET ended_at=?, status='completed', result_artifact=? WHERE id=?",
+                (now_iso(), artifact, row["id"]),
+            )
         conn.commit()
     finally:
         conn.close()
@@ -277,7 +308,7 @@ def complete_task(task_id: str, result_artifact: str = None,
     return get_task(task_id)
 
 
-def fail_task(task_id: str, error: str) -> Optional[dict]:
+def fail_task(task_id: str, error: str, agent_id: str = None) -> Optional[dict]:
     conn = get_conn()
     try:
         task_row = conn.execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone()
@@ -319,6 +350,19 @@ def fail_task(task_id: str, error: str) -> Optional[dict]:
             )
 
         conn.execute("UPDATE agents SET current_task_id=NULL WHERE current_task_id=?", (task_id,))
+        # Mark active attempt as failed
+        row = conn.execute(
+            "SELECT id FROM task_attempts WHERE task_id=? AND status='started' ORDER BY attempt_number DESC LIMIT 1",
+            (task_id,),
+        ).fetchone()
+        if row:
+            conn.execute(
+                """UPDATE task_attempts
+                   SET ended_at=?, status='failed', error=?,
+                       agent_id=COALESCE(agent_id, ?)
+                   WHERE id=?""",
+                (now_iso(), error, agent_id, row["id"]),
+            )
         conn.commit()
     finally:
         conn.close()
@@ -609,3 +653,45 @@ def reclaim_stale_tasks(threshold_seconds: int = 90):
         return len(stale_tasks)
     finally:
         conn.close()
+
+# ── Task attempt history helpers ────────────────────────────────────────
+
+def log_task_attempt(task_id: str, attempt_number: int, agent_id: str,
+                       status: str = 'started', error: str = None,
+                       result_artifact: str = None, ended_at: str = None):
+    conn = get_conn()
+    conn.execute(
+        """INSERT INTO task_attempts
+           (task_id, attempt_number, agent_id, started_at, ended_at, status, error, result_artifact)
+           VALUES (?,?,?,?,?,?,?,?)
+           ON CONFLICT DO NOTHING""",
+        (task_id, attempt_number, agent_id, now_iso(), ended_at, status, error, result_artifact),
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_task_attempts(task_id: str) -> list:
+    conn = get_conn()
+    rows = conn.execute(
+        "SELECT * FROM task_attempts WHERE task_id=? ORDER BY attempt_number ASC",
+        (task_id,),
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def update_task_attempt_end(task_id: str, attempt_number: int,
+                            status: str = 'completed', error: str = None,
+                            result_artifact: str = None):
+    conn = get_conn()
+    conn.execute(
+        """UPDATE task_attempts
+           SET ended_at=?, status=?, error=?, result_artifact=?
+           WHERE task_id=? AND attempt_number=?""",
+        (now_iso(), status, error, result_artifact, task_id, attempt_number),
+    )
+    cn = conn.total_changes
+    conn.commit()
+    conn.close()
+    return cn > 0
