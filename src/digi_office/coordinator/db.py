@@ -79,40 +79,6 @@ def init_db():
             task_id TEXT
         );
 
-        -- Dead letter queue: tasks that exhausted retries or unrecoverable
-        CREATE TABLE IF NOT EXISTS dead_letter_queue (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            task_id TEXT NOT NULL,
-            type TEXT,
-            project TEXT,
-            payload TEXT,
-            required_capabilities TEXT,
-            final_error TEXT,
-            retry_count INTEGER,
-            max_retries INTEGER,
-            failed_at TEXT NOT NULL,
-            recovered_at TEXT,
-            agent_id TEXT,
-            details TEXT
-        );
-        CREATE INDEX IF NOT EXISTS idx_dlq_task ON dead_letter_queue(task_id);
-        CREATE INDEX IF NOT EXISTS idx_dlq_project ON dead_letter_queue(project);
-
-        -- Attempt history: one row per task attempt (success or failure)
-        CREATE TABLE IF NOT EXISTS task_attempts (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            task_id TEXT NOT NULL,
-            attempt_number INTEGER NOT NULL,
-            agent_id TEXT,
-            status TEXT CHECK(status IN ('started','completed','failed')) NOT NULL,
-            error TEXT,
-            started_at TEXT,
-            finished_at TEXT,
-            result_artifact TEXT,
-            details TEXT
-        );
-        CREATE INDEX IF NOT EXISTS idx_attempts_task ON task_attempts(task_id);
-
         -- Backwards-compatible task_log alias
         CREATE TABLE IF NOT EXISTS task_log (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -121,6 +87,26 @@ def init_db():
             agent_id TEXT,
             timestamp TEXT,
             details TEXT
+        );
+
+        -- Dead Letter Queue: tasks that exhausted all retries
+        CREATE TABLE IF NOT EXISTS dead_letter (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            original_task_id TEXT UNIQUE,
+            type TEXT,
+            project TEXT,
+            priority INTEGER,
+            payload TEXT,
+            required_capabilities TEXT,
+            error TEXT,
+            retries INTEGER,
+            max_retries INTEGER,
+            first_attempt TEXT,
+            last_attempt TEXT,
+            moved_at TEXT,
+            assigned_to TEXT,
+            assigned_at TEXT,
+            target_machine TEXT
         );
     """)
     conn.commit()
@@ -232,7 +218,7 @@ def claim_task(agent_id: str, capabilities: list) -> Optional[dict]:
         conn.execute("BEGIN IMMEDIATE")
         # Fetch all pending tasks ordered by priority, then find first with matching caps
         rows = conn.execute("""
-            SELECT id, type, payload, required_capabilities, target_machine, retries
+            SELECT id, type, payload, required_capabilities, target_machine
             FROM tasks
             WHERE status = 'pending'
               AND (scheduled_at IS NULL OR scheduled_at <= datetime('now'))
@@ -253,14 +239,6 @@ def claim_task(agent_id: str, capabilities: list) -> Optional[dict]:
                 continue  # Race — someone else claimed it
 
             log_event(conn, row["id"], "claimed", agent_id)
-            # Record attempt start
-            attempt_num = (row["retries"] or 0) + 1
-            conn.execute(
-                """INSERT INTO task_attempts
-                   (task_id, attempt_number, agent_id, status, started_at)
-                   VALUES (?,?,?,?,?)""",
-                (row["id"], attempt_num, agent_id, "started", now_iso()),
-            )
             conn.execute("COMMIT")
 
             task_row = conn.execute("SELECT * FROM tasks WHERE id=?", (row["id"],)).fetchone()
@@ -290,8 +268,6 @@ def complete_task(task_id: str, result_artifact: str = None,
         )
         conn.execute("UPDATE agents SET current_task_id=NULL WHERE current_task_id=?", (task_id,))
         log_event(conn, task_id, "completed")
-        # Update the active attempt
-        log_attempt_completion(task_id, result_artifact=artifact)
         conn.commit()
     finally:
         conn.close()
@@ -301,7 +277,7 @@ def complete_task(task_id: str, result_artifact: str = None,
     return get_task(task_id)
 
 
-def fail_task(task_id: str, error: str, agent_id: Optional[str] = None) -> Optional[dict]:
+def fail_task(task_id: str, error: str) -> Optional[dict]:
     conn = get_conn()
     try:
         task_row = conn.execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone()
@@ -311,16 +287,6 @@ def fail_task(task_id: str, error: str, agent_id: Optional[str] = None) -> Optio
 
         retries = task["retries"] + 1
         max_retries = task["max_retries"]
-        attempt_num = retries  # matches retry count semantics
-
-        # Log the failed attempt
-        conn.execute(
-            """INSERT INTO task_attempts
-               (task_id, attempt_number, agent_id, status, error, finished_at)
-               VALUES (?,?,?,?,?,?)""",
-            (task_id, attempt_num, agent_id or task.get("assigned_to"), "failed",
-             error, now_iso()),
-        )
 
         if retries < max_retries:
             delay_minutes = 2 ** retries
@@ -330,7 +296,7 @@ def fail_task(task_id: str, error: str, agent_id: Optional[str] = None) -> Optio
                    WHERE id=?""",
                 (retries, error, f"+{delay_minutes} minutes", task_id),
             )
-            log_event(conn, task_id, "retry", details=f"retry {retries}/{max_retries}")
+            log_event(conn, task_id, "retry", details=f"retry {retries}/{max_retries}: {error}")
         else:
             conn.execute(
                 """UPDATE tasks SET status='failed', retries=?, error=?, completed_at=?
@@ -338,16 +304,18 @@ def fail_task(task_id: str, error: str, agent_id: Optional[str] = None) -> Optio
                 (retries, error, now_iso(), task_id),
             )
             log_event(conn, task_id, "failed", details=error)
-
-            # Write to dead-letter queue
+            # Move to DLQ
             conn.execute(
-                """INSERT INTO dead_letter_queue
-                   (task_id, type, project, payload, required_capabilities,
-                    final_error, retry_count, max_retries, failed_at, agent_id)
-                   VALUES (?,?,?,?,?,?,?,?,?,?)""",
-                (task_id, task["type"], task["project"], task["payload"],
-                 task["required_capabilities"], error, retries, max_retries,
-                 now_iso(), agent_id or task.get("assigned_to")),
+                """INSERT OR IGNORE INTO dead_letter
+                   (original_task_id, type, project, priority, payload,
+                    required_capabilities, error, retries, max_retries,
+                    first_attempt, last_attempt, moved_at,
+                    assigned_to, assigned_at, target_machine)
+                   SELECT id, type, project, priority, payload,
+                          required_capabilities, ?, ?, ?, created_at, ?, ?,
+                          assigned_to, claimed_at, target_machine
+                   FROM tasks WHERE id=?""",
+                (error, retries, max_retries, now_iso(), now_iso(), task_id),
             )
 
         conn.execute("UPDATE agents SET current_task_id=NULL WHERE current_task_id=?", (task_id,))
@@ -428,30 +396,8 @@ def mark_stale_agents_offline(threshold_seconds: int = 90):
         (f"-{threshold_seconds} seconds",),
     ).fetchall()
     if stale:
-        stale_ids = [r["id"] for r in stale]
-        # Find any claimed/running tasks assigned to stale agents
-        placeholders = ",".join(["?"] * len(stale_ids))
-        orphaned = conn.execute(
-            f"""SELECT id, retries FROM tasks
-               WHERE status IN ('claimed','running')
-                 AND assigned_to IN ({placeholders})""",
-            stale_ids,
-        ).fetchall()
-        for t in orphaned:
-            # Re-queue the task for retry
-            conn.execute(
-                """UPDATE tasks
-                   SET status='pending',
-                       assigned_to=NULL,
-                       claimed_at=NULL,
-                       retries=?
-                   WHERE id=?""",
-                (t["retries"], t["id"]),
-            )
-            log_event(conn, t["id"], "requeued", details="agent went stale")
-        # Mark agents offline
         conn.execute(
-            """UPDATE agents SET online=0, current_task_id=NULL
+            """UPDATE agents SET online=0
                WHERE online=1 AND last_heartbeat < datetime('now', ?)""",
             (f"-{threshold_seconds} seconds",),
         )
@@ -459,74 +405,6 @@ def mark_stale_agents_offline(threshold_seconds: int = 90):
     conn.close()
     for row in stale:
         emit("agent_offline", source=row["id"])
-
-
-# ── DLQ helpers ───────────────────────────────────────────────────────────
-
-def get_dlq(project: str = None, limit: int = 100) -> list:
-    conn = get_conn()
-    where_clause = "WHERE project=?" if project else ""
-    params = (project,) if project else ()
-    rows = conn.execute(
-        f"""SELECT * FROM dead_letter_queue
-            {where_clause}
-            ORDER BY failed_at DESC LIMIT ?""",
-        params + (limit,),
-    ).fetchall()
-    conn.close()
-    return [dict(r) for r in rows]
-
-
-def recover_dlq_entry(dlq_id: int) -> Optional[dict]:
-    """Move a DLQ task back to pending."""
-    conn = get_conn()
-    row = conn.execute(
-        "SELECT * FROM dead_letter_queue WHERE id=?", (dlq_id,),
-    ).fetchone()
-    if not row:
-        conn.close()
-        return None
-    # Re-create task from DLQ
-    conn.execute(
-        """UPDATE tasks SET status='pending', retries=0, error=NULL,
-           assigned_to=NULL, completed_at=NULL
-           WHERE id=? AND status='failed'""",
-        (row["task_id"],),
-    )
-    conn.execute(
-        "UPDATE dead_letter_queue SET recovered_at=? WHERE id=?",
-        (now_iso(), dlq_id),
-    )
-    conn.commit()
-    conn.close()
-    return get_task(row["task_id"])
-
-
-# ── Attempt history helpers ───────────────────────────────────────────────
-
-def get_task_attempts(task_id: str) -> list:
-    conn = get_conn()
-    rows = conn.execute(
-        """SELECT * FROM task_attempts
-           WHERE task_id=? ORDER BY attempt_number ASC""",
-        (task_id,),
-    ).fetchall()
-    conn.close()
-    return [dict(r) for r in rows]
-
-
-def log_attempt_completion(task_id: str, result_artifact: str = None) -> int:
-    conn = get_conn()
-    conn.execute(
-        """UPDATE task_attempts SET status='completed', finished_at=?, result_artifact=?
-           WHERE task_id=? AND status='started'
-           ORDER BY attempt_number DESC LIMIT 1""",
-        (now_iso(), result_artifact, task_id),
-    )
-    changed = conn.total_changes
-    conn.commit()
-    conn.close()
-    return changed
 
 
 # ── A2A messaging ──────────────────────────────────────────────────────
@@ -610,3 +488,124 @@ def log_tool_result(agent_id: str, task_id: str, tool_name: str,
     emit("tool_result", source=agent_id, task_id=task_id,
          details={"tool": tool_name, "output": tool_output,
                   "duration_ms": duration_ms, "success": success})
+
+
+# ── Dead Letter Queue ──────────────────────────────────────────────────
+
+def list_dlq(limit: int = 100) -> list:
+    """Return dead letter entries ordered by when they were moved (newest first)."""
+    conn = get_conn()
+    rows = conn.execute(
+        "SELECT * FROM dead_letter ORDER BY id DESC LIMIT ?", (limit,),
+    ).fetchall()
+    conn.close()
+    result = []
+    for r in rows:
+        d = dict(r)
+        for field in ("payload", "required_capabilities"):
+            try:
+                d[field] = json.loads(d[field] or "[]")
+            except Exception:
+                pass
+        result.append(d)
+    return result
+
+
+def get_dlq_entry(original_task_id: str) -> Optional[dict]:
+    """Return a single DLQ entry by the original task ID."""
+    conn = get_conn()
+    row = conn.execute(
+        "SELECT * FROM dead_letter WHERE original_task_id=?", (original_task_id,),
+    ).fetchone()
+    conn.close()
+    if not row:
+        return None
+    d = dict(row)
+    for field in ("payload", "required_capabilities"):
+        try:
+            d[field] = json.loads(d[field] or "[]")
+        except Exception:
+            pass
+    return d
+
+
+def requeue_from_dlq(original_task_id: str, max_retries: int | None = None) -> dict:
+    """
+    Requeue a task from the DLQ. Creates a fresh pending task with a new UUID.
+    Optionally overrides max_retries. Returns the new task dict.
+    """
+    entry = get_dlq_entry(original_task_id)
+    if not entry:
+        return {"ok": False, "error": "DLQ entry not found"}
+
+    conn = get_conn()
+    new_task_id = str(uuid.uuid4())
+    override_retries = max_retries if max_retries is not None else (entry["max_retries"] or 3)
+    conn.execute(
+        """INSERT INTO tasks
+           (id, type, project, priority, payload, required_capabilities,
+            status, created_at, max_retries, target_machine)
+           VALUES (?,?,?,?,?,?,?,?,?,?)""",
+        (new_task_id, entry["type"], entry["project"], entry["priority"],
+         entry["payload"], entry["required_capabilities"],
+         "pending", now_iso(), override_retries, entry["target_machine"]),
+    )
+    conn.execute("DELETE FROM dead_letter WHERE original_task_id=?", (original_task_id,))
+    conn.commit()
+    conn.close()
+    return {"ok": True, "new_task_id": new_task_id}
+
+
+def release_task(task_id: str) -> Optional[dict]:
+    """
+    Release a task that an agent abandoned (went stale without completing).
+    Resets it to pending so another agent can claim it.
+    """
+    conn = get_conn()
+    try:
+        task_row = conn.execute(
+            "SELECT * FROM tasks WHERE id=? AND status IN ('claimed','running')", (task_id,),
+        ).fetchone()
+        if not task_row:
+            return None
+        task = dict(task_row)
+        conn.execute(
+            """UPDATE tasks SET status='pending', assigned_to=NULL,
+               claimed_at=NULL, retries=retries
+               WHERE id=?""",
+            (task_id,),
+        )
+        log_event(conn, task_id, "released", details="agent went stale")
+        conn.commit()
+    finally:
+        conn.close()
+    return get_task(task_id)
+
+
+def reclaim_stale_tasks(threshold_seconds: int = 90):
+    """
+    Find tasks stuck in claimed/running whose assigned agent has gone stale
+    and reset them to pending so they can be re-claimed.
+    Runs inside the sweeper; silently skips if no stale tasks found.
+    """
+    conn = get_conn()
+    try:
+        stale_tasks = conn.execute(
+            """SELECT t.id FROM tasks t
+               LEFT JOIN agents a ON t.assigned_to = a.id
+               WHERE t.status IN ('claimed', 'running')
+                 AND t.assigned_to IS NOT NULL
+                 AND (a.online = 0 OR a.last_heartbeat < datetime('now', ?))""",
+            (f"-{threshold_seconds} seconds",),
+        ).fetchall()
+        for row in stale_tasks:
+            conn.execute(
+                """UPDATE tasks SET status='pending', assigned_to=NULL,
+                   claimed_at=NULL WHERE id=?""",
+                (row["id"],),
+            )
+            log_event(conn, row["id"], "reclaimed", details="assigned agent went stale")
+        conn.commit()
+        return len(stale_tasks)
+    finally:
+        conn.close()
