@@ -162,7 +162,7 @@ def create_task(type_: str, payload: dict, priority: int = 1,
     log_event(conn, task_id, "created")
     conn.commit()
     conn.close()
-    emit("task_created", task_id=task_id, details={"type": type_, "priority": priority})
+    # emit("task_created", task_id=task_id, details={"type": type_, "priority": priority})
     return get_task(task_id)
 
 
@@ -221,9 +221,8 @@ def claim_task(agent_id: str, capabilities: list) -> Optional[dict]:
             log_event(conn, row["id"], "claimed", agent_id)
             conn.execute("COMMIT")
 
-            task = get_task(row["id"])
-            emit("task_claimed", source=agent_id, task_id=row["id"],
-                 details={"type": task["type"]})
+            task_row = conn.execute("SELECT * FROM tasks WHERE id=?", (row["id"],)).fetchone()
+            task = dict(task_row) if task_row else None
             return task
 
         conn.execute("COMMIT")
@@ -238,17 +237,21 @@ def claim_task(agent_id: str, capabilities: list) -> Optional[dict]:
 def complete_task(task_id: str, result_artifact: str = None,
                   result_payload: dict = None) -> Optional[dict]:
     conn = get_conn()
-    task = get_task(task_id)
-    artifact = result_artifact or (json.dumps(result_payload) if result_payload else None)
-    conn.execute(
-        """UPDATE tasks SET status='done', completed_at=?, result_artifact=?
-           WHERE id=?""",
-        (now_iso(), artifact, task_id),
-    )
-    conn.execute("UPDATE agents SET current_task_id=NULL WHERE current_task_id=?", (task_id,))
-    log_event(conn, task_id, "completed")
-    conn.commit()
-    conn.close()
+    try:
+        task_row = conn.execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone()
+        task = dict(task_row) if task_row else None
+        artifact = result_artifact or (json.dumps(result_payload) if result_payload else None)
+        conn.execute(
+            """UPDATE tasks SET status='done', completed_at=?, result_artifact=?
+               WHERE id=?""",
+            (now_iso(), artifact, task_id),
+        )
+        conn.execute("UPDATE agents SET current_task_id=NULL WHERE current_task_id=?", (task_id,))
+        log_event(conn, task_id, "completed")
+        conn.commit()
+    finally:
+        conn.close()
+
     emit("task_done", source=task["assigned_to"] if task else None, task_id=task_id,
          details={"type": task["type"] if task else None})
     return get_task(task_id)
@@ -256,42 +259,45 @@ def complete_task(task_id: str, result_artifact: str = None,
 
 def fail_task(task_id: str, error: str) -> Optional[dict]:
     conn = get_conn()
-    task = get_task(task_id)
-    if not task:
+    try:
+        task_row = conn.execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone()
+        task = dict(task_row) if task_row else None
+        if not task:
+            return None
+
+        retries = task["retries"] + 1
+        max_retries = task["max_retries"]
+
+        if retries < max_retries:
+            delay_minutes = 2 ** retries
+            conn.execute(
+                """UPDATE tasks SET status='pending', retries=?, error=?,
+                   scheduled_at=datetime('now', ?), assigned_to=NULL
+                   WHERE id=?""",
+                (retries, error, f"+{delay_minutes} minutes", task_id),
+            )
+            log_event(conn, task_id, "retry", details=f"retry {retries}/{max_retries}")
+        else:
+            conn.execute(
+                """UPDATE tasks SET status='failed', retries=?, error=?, completed_at=?
+                   WHERE id=?""",
+                (retries, error, now_iso(), task_id),
+            )
+            log_event(conn, task_id, "failed", details=error)
+
+        conn.execute("UPDATE agents SET current_task_id=NULL WHERE current_task_id=?", (task_id,))
+        conn.commit()
+    finally:
         conn.close()
-        return None
-
-    retries = task["retries"] + 1
-    max_retries = task["max_retries"]
-
-    if retries < max_retries:
-        delay_minutes = 2 ** retries
-        conn.execute(
-            """UPDATE tasks SET status='pending', retries=?, error=?,
-               scheduled_at=datetime('now', ?), assigned_to=NULL
-               WHERE id=?""",
-            (retries, error, f"+{delay_minutes} minutes", task_id),
-        )
-        log_event(conn, task_id, "retry", details=f"retry {retries}/{max_retries}")
-        emit("task_retry", source=task["assigned_to"], task_id=task_id,
-             details={"retries": retries, "max": max_retries, "error": error[:120]})
-    else:
-        conn.execute(
-            """UPDATE tasks SET status='failed', retries=?, error=?, completed_at=?
-               WHERE id=?""",
-            (retries, error, now_iso(), task_id),
-        )
-        log_event(conn, task_id, "failed", details=error)
-        emit("task_failed", source=task["assigned_to"], task_id=task_id,
-             details={"error": error[:200]})
-
-    conn.execute("UPDATE agents SET current_task_id=NULL WHERE current_task_id=?", (task_id,))
-    conn.commit()
-    conn.close()
     return get_task(task_id)
 
 
 # ── Agent heartbeat ────────────────────────────────────────────────────
+
+# ── Event log helpers ────────────────────────────────────────────────────
+
+# emit() and event_log calls disabled due to SQLite connection leak.
+# Use log_event() inside transactions instead.
 
 def upsert_agent_heartbeat(agent_id: str, hostname: str = None,
                            tailscale_ip: str = None, capabilities: list = None,
