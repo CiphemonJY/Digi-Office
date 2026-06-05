@@ -7,19 +7,19 @@ ROUTING_TABLE = {
         "proxy": False,
     },
     "ontology_validate": {
-        "default": "jetson",
-        "fallback": "hermes",
+        "default": "dgx_primary",
+        "fallback": "dgx_secondary",
         "required_capabilities": [],
         "proxy": True,
     },
     "ontology_quality_check": {
-        "default": "jetson",
-        "fallback": "hermes",
+        "default": "dgx_primary",
+        "fallback": "dgx_secondary",
         "required_capabilities": [],
         "proxy": True,
     },
 
-    # ── FHIR generation pipeline (DGX produces, Jetson stores) ────
+    # ── FHIR generation pipeline (DGX produces, DGX validates) ────
     "fhir_generate": {
         "default": "dgx_primary",
         "fallback": "dgx_secondary",
@@ -27,14 +27,14 @@ ROUTING_TABLE = {
         "proxy": True,
     },
     "fhir_validate": {
-        "default": "jetson",
-        "fallback": "dgx_primary",
+        "default": "dgx_primary",
+        "fallback": "dgx_secondary",
         "required_capabilities": [],
         "proxy": True,
     },
     "fhir_bundle_clean": {
-        "default": "jetson",
-        "fallback": "dgx_primary",
+        "default": "dgx_primary",
+        "fallback": "dgx_secondary",
         "required_capabilities": [],
         "proxy": True,
     },

@@ -11,16 +11,26 @@ MACHINES = {
         "host": "10.0.0.121",
         "user": "jetson",
         "key": "~/.ssh/id_ed25519_openclaw",
+        "ssh_binary": "ssh",
+        "ssh_opts": [
+            "-o", "StrictHostKeyChecking=no",
+            "-o", "BatchMode=yes",
+            "-o", "ConnectTimeout=15",
+            "-o", "ServerAliveInterval=30",
+            "-o", "ServerAliveCountMax=2",
+        ],
     },
     "dgx_primary": {
         "host": "100.72.65.100",
         "user": "syeung",
-        "key": "~/.ssh/id_ed25519_dgx",
+        "ssh_binary": "tailscale ssh",
+        "ssh_opts": [],
     },
     "dgx_secondary": {
         "host": "100.99.1.84",
         "user": "syeung",
-        "key": "~/.ssh/id_ed25519_dgx",
+        "ssh_binary": "tailscale ssh",
+        "ssh_opts": [],
     },
 }
 
@@ -60,9 +70,14 @@ class WorkerProxy:
 
         target = f"{machine['user']}@{machine['host']}"
         key = machine.get("key")
-        
+        ssh_bin = machine.get("ssh_binary", "ssh")
+        ssh_opts = machine.get("ssh_opts", SSH_OPTS)
+
+        # Split ssh_binary for subprocess (e.g. "tailscale ssh" -> ["tailscale", "ssh"])
+        ssh_argv = ssh_bin.split()
+
         # Wrap ssh with timeout to prevent indefinite hangs
-        cmd = ["timeout", str(timeout)] + ["ssh"] + SSH_OPTS
+        cmd = ["timeout", str(timeout)] + ssh_argv + ssh_opts
         if key:
             cmd += ["-i", key]
         cmd += [target, command]
