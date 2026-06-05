@@ -14,6 +14,7 @@ from .db import (
     get_task_log, mark_stale_agents_offline, emit, get_feed,
     send_a2a_message, get_a2a_inbox, ack_a2a_message, get_a2a_recent,
     log_tool_call, log_tool_result,
+    get_dlq, recover_dlq_entry, get_task_attempts,
 )
 from .routing import resolve_route
 from .worker_proxy import proxy
@@ -64,6 +65,7 @@ class CompletePayload(BaseModel):
 
 class FailPayload(BaseModel):
     error: str = ""
+    agent_id: Optional[str] = None
 
 
 class TaskHeartbeat(BaseModel):
@@ -181,7 +183,7 @@ def complete_task_endpoint(task_id: str, body: CompletePayload):
 
 @app.post("/tasks/{task_id}/fail")
 def fail_task_endpoint(task_id: str, body: FailPayload):
-    task = fail_task(task_id, body.error)
+    task = fail_task(task_id, body.error, agent_id=body.agent_id)
     if not task:
         raise HTTPException(404, "Task not found")
     return task
@@ -222,12 +224,38 @@ def list_agents():
 
 @app.post("/a2a/messages", status_code=201)
 def send_message(body: A2AMessage):
+    # Validate payload shape
+    if not isinstance(body.payload, dict):
+        raise HTTPException(422, "payload must be a JSON object (dict)")
+    if not isinstance(body.message_type, str) or not body.message_type:
+        raise HTTPException(422, "message_type must be a non-empty string")
+    # Cap nested depth and total serialized size to prevent garbage / DoS
+    raw = json.dumps(body.payload)
+    if len(raw) > 50_000:
+        raise HTTPException(413, "payload exceeds 50KB limit")
+    # Reject non-printable / control characters in keys
+    for key in _all_keys(body.payload):
+        if any(ord(ch) < 32 for ch in key):
+            raise HTTPException(422, "payload keys must be printable")
     msg_id = send_a2a_message(
         from_agent=body.from_agent, to_agent=body.to_agent,
         message_type=body.message_type, payload=body.payload,
         task_id=body.task_id,
     )
     return {"id": msg_id, "ok": True}
+
+
+def _all_keys(d: dict, _seen=None):
+    """Yield every string key nested in a dict (recursively)."""
+    if _seen is None:
+        _seen = set()
+    if id(d) in _seen:
+        return  # Guard against circular refs
+    _seen.add(id(d))
+    for k, v in d.items():
+        yield k
+        if isinstance(v, dict):
+            yield from _all_keys(v, _seen)
 
 
 @app.get("/a2a/messages")
@@ -323,6 +351,29 @@ def _run_proxy_task(task: dict):
         fail_task(task_id, err)
         emit("proxy_failed", source="hermes", target=machine, task_id=task_id,
              details={"error": err, "exception": True})
+
+
+# ── DLQ + Attempt History ─────────────────────────────────────────────
+
+@app.get("/dlq")
+def list_dlq(project: str = Query(None), limit: int = Query(100)):
+    return get_dlq(project=project, limit=limit)
+
+
+@app.post("/dlq/{dlq_id}/recover")
+def recover_dlq_endpoint(dlq_id: int):
+    task = recover_dlq_entry(dlq_id)
+    if not task:
+        raise HTTPException(404, "DLQ entry not found or task no longer failed")
+    return task
+
+
+@app.get("/tasks/{task_id}/attempts")
+def task_attempts_endpoint(task_id: str):
+    task = get_task(task_id)
+    if not task:
+        raise HTTPException(404, "Task not found")
+    return {"task_id": task_id, "attempts": get_task_attempts(task_id)}
 
 
 # ── Dashboard ──────────────────────────────────────────────────────────
