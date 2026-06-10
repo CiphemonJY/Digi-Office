@@ -1,3 +1,4 @@
+import os
 import sqlite3
 import json
 import uuid
@@ -5,7 +6,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-DB_PATH = Path(__file__).parent.parent / "data" / "digioffice.db"
+DB_PATH = Path(os.environ.get(
+    "DIGI_OFFICE_DB",
+    str(Path(__file__).parent.parent / "data" / "digioffice.db"),
+))
 
 
 def get_conn() -> sqlite3.Connection:
@@ -77,6 +81,16 @@ def init_db():
             status TEXT CHECK(status IN ('sent','delivered','read')) DEFAULT 'sent',
             created_at TEXT,
             task_id TEXT
+        );
+
+        -- Per-recipient read receipts. The single status column above cannot
+        -- represent broadcast (to_agent IS NULL) reads: the first reader's ack
+        -- would hide the message from every other agent.
+        CREATE TABLE IF NOT EXISTS a2a_reads (
+            msg_id TEXT NOT NULL,
+            agent_id TEXT NOT NULL,
+            read_at TEXT,
+            PRIMARY KEY (msg_id, agent_id)
         );
 
         -- Backwards-compatible task_log alias
@@ -210,7 +224,17 @@ def get_task(task_id: str) -> Optional[dict]:
     conn = get_conn()
     row = conn.execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone()
     conn.close()
-    return dict(row) if row else None
+    if not row:
+        return None
+    task = dict(row)
+    # Workers submit result_payload but the column is result_artifact (a JSON
+    # string); consumers reading task["result"] saw None even on completed
+    # tasks (Sprint 5.5 "result=None" bug). Expose the parsed value.
+    try:
+        task["result"] = json.loads(task["result_artifact"]) if task["result_artifact"] else None
+    except (TypeError, ValueError):
+        task["result"] = task["result_artifact"]
+    return task
 
 
 def list_tasks(status: str = None, agent_id: str = None,
@@ -280,13 +304,31 @@ def claim_task(agent_id: str, capabilities: list) -> Optional[dict]:
         conn.close()
 
 
+class NotTaskOwner(Exception):
+    """Raised when an agent reports on a task that has been reassigned."""
+
+
 def complete_task(task_id: str, result_artifact: str = None,
-                  result_payload: dict = None) -> Optional[dict]:
+                  result_payload: dict = None, agent_id: str = None) -> Optional[dict]:
     conn = get_conn()
     try:
         task_row = conn.execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone()
         task = dict(task_row) if task_row else None
-        artifact = result_artifact or (json.dumps(result_payload) if result_payload else None)
+        if not task:
+            return None
+        if task["status"] == "done":
+            return get_task(task_id)  # idempotent re-complete
+        # Fencing: a stale agent whose task was reclaimed and reassigned must
+        # not overwrite the new owner's run. Only enforced when the caller
+        # identifies itself (backward compatible with older workers).
+        if agent_id and task["assigned_to"] and task["assigned_to"] != agent_id:
+            raise NotTaskOwner(
+                f"task {task_id} is assigned to {task['assigned_to']}, not {agent_id}")
+        # `is not None`: an empty-dict result ({} is falsy) was silently
+        # dropped, storing NULL — workers that legitimately had nothing to
+        # report looked like the result-reporting bug.
+        artifact = result_artifact if result_artifact is not None else (
+            json.dumps(result_payload) if result_payload is not None else None)
         conn.execute(
             """UPDATE tasks SET status='done', completed_at=?, result_artifact=?
                WHERE id=?""",
@@ -320,6 +362,11 @@ def fail_task(task_id: str, error: str, agent_id: str = None) -> Optional[dict]:
         task = dict(task_row) if task_row else None
         if not task:
             return None
+        # Same fencing as complete_task: a reclaimed agent's failure report
+        # must not burn a retry of the new owner's attempt.
+        if agent_id and task["assigned_to"] and task["assigned_to"] != agent_id:
+            raise NotTaskOwner(
+                f"task {task_id} is assigned to {task['assigned_to']}, not {agent_id}")
 
         retries = task["retries"] + 1
         max_retries = task["max_retries"]
@@ -438,16 +485,21 @@ def get_task_log(task_id: str) -> list:
 
 
 def mark_stale_agents_offline(threshold_seconds: int = 90):
+    # last_heartbeat is stored as ISO-8601 with 'T' ("...T12:00:00Z") while
+    # datetime('now') yields "... 12:00:00". Comparing the raw strings is
+    # lexicographic and 'T' > ' ', so same-day heartbeats ALWAYS compared as
+    # newer and agents only ever went stale at UTC date rollover. Normalize
+    # both sides through datetime() so the comparison is temporal.
     conn = get_conn()
     stale = conn.execute(
         """SELECT id FROM agents WHERE online=1
-           AND last_heartbeat < datetime('now', ?)""",
+           AND datetime(last_heartbeat) < datetime('now', ?)""",
         (f"-{threshold_seconds} seconds",),
     ).fetchall()
     if stale:
         conn.execute(
             """UPDATE agents SET online=0
-               WHERE online=1 AND last_heartbeat < datetime('now', ?)""",
+               WHERE online=1 AND datetime(last_heartbeat) < datetime('now', ?)""",
             (f"-{threshold_seconds} seconds",),
         )
         conn.commit()
@@ -479,12 +531,22 @@ def send_a2a_message(from_agent: str, to_agent: Optional[str],
 
 
 def get_a2a_inbox(agent_id: str, unread_only: bool = True) -> list:
+    """
+    Unread state is tracked per recipient in a2a_reads. The old single
+    status column meant the FIRST agent to ack a broadcast (to_agent IS NULL)
+    hid it from every other agent — broadcasts reached exactly one reader.
+    Broadcasts are also no longer delivered back to their sender.
+    """
     conn = get_conn()
-    clause = "WHERE (to_agent=? OR to_agent IS NULL) AND status!='read'" if unread_only else \
-             "WHERE (to_agent=? OR to_agent IS NULL)"
+    base = "WHERE (to_agent=? OR (to_agent IS NULL AND from_agent != ?))"
+    unread = """ AND NOT EXISTS (
+                   SELECT 1 FROM a2a_reads r
+                   WHERE r.msg_id = a2a_messages.id AND r.agent_id = ?)"""
+    clause = base + (unread if unread_only else "")
+    params = (agent_id, agent_id, agent_id) if unread_only else (agent_id, agent_id)
     rows = conn.execute(
         f"SELECT * FROM a2a_messages {clause} ORDER BY created_at ASC",
-        (agent_id,),
+        params,
     ).fetchall()
     conn.close()
     result = []
@@ -498,9 +560,26 @@ def get_a2a_inbox(agent_id: str, unread_only: bool = True) -> list:
     return result
 
 
-def ack_a2a_message(msg_id: str) -> bool:
+def ack_a2a_message(msg_id: str, agent_id: str = None) -> bool:
     conn = get_conn()
-    conn.execute("UPDATE a2a_messages SET status='read' WHERE id=?", (msg_id,))
+    if agent_id:
+        conn.execute(
+            "INSERT OR IGNORE INTO a2a_reads (msg_id, agent_id, read_at) VALUES (?,?,?)",
+            (msg_id, agent_id, now_iso()),
+        )
+        # Keep the legacy status column meaningful for DIRECTED messages only;
+        # flipping it on a broadcast would hide it from other recipients via
+        # any legacy reader still filtering on status.
+        conn.execute(
+            "UPDATE a2a_messages SET status='read' WHERE id=? AND to_agent IS NOT NULL",
+            (msg_id,),
+        )
+    else:
+        # Legacy ack without agent identity: original behavior (directed only).
+        conn.execute(
+            "UPDATE a2a_messages SET status='read' WHERE id=? AND to_agent IS NOT NULL",
+            (msg_id,),
+        )
     changed = conn.total_changes > 0
     conn.commit()
     conn.close()
@@ -634,30 +713,79 @@ def release_task(task_id: str) -> Optional[dict]:
 def reclaim_stale_tasks(threshold_seconds: int = 90):
     """
     Find tasks stuck in claimed/running whose assigned agent has gone stale
-    and reset them to pending so they can be re-claimed.
-    Runs inside the sweeper; silently skips if no stale tasks found.
+    and route them through the normal failure path (retry with backoff, DLQ
+    when exhausted). Runs inside the sweeper.
+
+    Notes on the WHERE clause:
+    - `a.id IS NULL` covers agents that claimed without ever heartbeating
+      (unregistered): the LEFT JOIN yields NULL and `NULL OR NULL` filtered
+      the row out, so their tasks rotted forever (coordinator audit 2026-06-06).
+    - `datetime(...)` normalizes the ISO-'T' heartbeat format; raw string
+      comparison never matched within the same UTC day.
+    - Grace period on claimed_at so a task claimed a moment ago by an agent
+      that has not heartbeated yet is not instantly reclaimed.
     """
     conn = get_conn()
     try:
+        # 'proxy:%' owners are coordinator-internal threads, not heartbeating
+        # agents — the sweeper must not reclaim them mid-run. Crashed proxy
+        # runs are recovered at startup by reclaim_orphaned_proxy_tasks().
         stale_tasks = conn.execute(
             """SELECT t.id FROM tasks t
                LEFT JOIN agents a ON t.assigned_to = a.id
                WHERE t.status IN ('claimed', 'running')
                  AND t.assigned_to IS NOT NULL
-                 AND (a.online = 0 OR a.last_heartbeat < datetime('now', ?))""",
-            (f"-{threshold_seconds} seconds",),
+                 AND t.assigned_to NOT LIKE 'proxy:%'
+                 AND datetime(t.claimed_at) < datetime('now', ?)
+                 AND (a.id IS NULL
+                      OR a.online = 0
+                      OR datetime(a.last_heartbeat) < datetime('now', ?))""",
+            (f"-{threshold_seconds} seconds", f"-{threshold_seconds} seconds"),
         ).fetchall()
-        for row in stale_tasks:
-            conn.execute(
-                """UPDATE tasks SET status='pending', assigned_to=NULL,
-                   claimed_at=NULL WHERE id=?""",
-                (row["id"],),
-            )
-            log_event(conn, row["id"], "reclaimed", details="assigned agent went stale")
-        conn.commit()
-        return len(stale_tasks)
     finally:
         conn.close()
+
+    # Route through fail_task so reclaims consume a retry, get exponential
+    # backoff, close the open task_attempt, and dead-letter when exhausted —
+    # a permanently crashing agent must not ping-pong a task forever.
+    for row in stale_tasks:
+        fail_task(row["id"], "reclaimed: assigned agent went stale")
+    return len(stale_tasks)
+
+def reassign_task(task_id: str, new_owner: str) -> None:
+    """
+    Hand a claimed task to a different owner. Used when the claim endpoint
+    dispatches a proxy-routed task: the polling agent that happened to claim
+    it never executes it, so leaving it as the owner corrupted ownership
+    accounting (fencing, reclaim, dashboards).
+    """
+    conn = get_conn()
+    conn.execute("UPDATE tasks SET assigned_to=? WHERE id=?", (new_owner, task_id))
+    log_event(conn, task_id, "reassigned", details=f"owner={new_owner}")
+    conn.commit()
+    conn.close()
+
+
+def reclaim_orphaned_proxy_tasks() -> int:
+    """
+    Proxy tasks run on daemon threads inside the coordinator process; if the
+    coordinator dies mid-run those tasks are stuck in claimed/running with a
+    'proxy:%' owner that no longer exists. Called once at startup — any such
+    task is, by construction, dead. Routes through fail_task for retry/DLQ.
+    """
+    conn = get_conn()
+    try:
+        rows = conn.execute(
+            """SELECT id FROM tasks
+               WHERE status IN ('claimed', 'running')
+                 AND assigned_to LIKE 'proxy:%'""",
+        ).fetchall()
+    finally:
+        conn.close()
+    for row in rows:
+        fail_task(row["id"], "coordinator restarted during proxy execution")
+    return len(rows)
+
 
 # ── Task attempt history helpers ────────────────────────────────────────
 

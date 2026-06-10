@@ -1,6 +1,8 @@
 import json
 import logging
 import asyncio
+import os
+import secrets
 from contextlib import asynccontextmanager
 from typing import Optional
 
@@ -15,7 +17,8 @@ from .db import (
     send_a2a_message, get_a2a_inbox, ack_a2a_message, get_a2a_recent,
     log_tool_call, log_tool_result, list_dlq, get_dlq_entry,
     requeue_from_dlq, release_task, reclaim_stale_tasks,
-    get_task_attempts,
+    get_task_attempts, NotTaskOwner, reassign_task,
+    reclaim_orphaned_proxy_tasks,
 )
 from .routing import resolve_route
 from .worker_proxy import proxy
@@ -27,11 +30,31 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
+    orphaned = reclaim_orphaned_proxy_tasks()
+    if orphaned:
+        logger.warning("Requeued %d proxy task(s) orphaned by a coordinator restart", orphaned)
     asyncio.create_task(_stale_agent_sweeper())
     yield
 
 
 app = FastAPI(title="Digi-Office Coordinator", version="1.0.0", lifespan=lifespan)
+
+
+@app.middleware("http")
+async def auth_middleware(request: Request, call_next):
+    """
+    Optional shared-secret auth: set DIGI_OFFICE_TOKEN on the coordinator and
+    every agent. Mutating routes (all POSTs, plus /tasks/claim which assigns
+    work) then require `Authorization: Bearer <token>`. Read-only GETs stay
+    open so /health checks and the dashboard keep working. No token set =
+    no auth (backward compatible).
+    """
+    token = os.environ.get("DIGI_OFFICE_TOKEN")
+    if token and (request.method == "POST" or request.url.path == "/tasks/claim"):
+        supplied = request.headers.get("authorization", "")
+        if not secrets.compare_digest(supplied, f"Bearer {token}"):
+            return JSONResponse({"detail": "unauthorized"}, status_code=401)
+    return await call_next(request)
 
 
 async def _stale_agent_sweeper():
@@ -64,6 +87,7 @@ class HeartbeatPayload(BaseModel):
 class CompletePayload(BaseModel):
     result_artifact: Optional[str] = None
     result_payload: Optional[dict] = None
+    agent_id: Optional[str] = None
 
 
 class FailPayload(BaseModel):
@@ -86,7 +110,7 @@ class A2AMessage(BaseModel):
 
 
 class AckMessage(BaseModel):
-    pass
+    agent_id: Optional[str] = None
 
 
 class ToolCallStart(BaseModel):
@@ -196,6 +220,10 @@ def claim_task_endpoint(
 
     route = resolve_route(task["type"])
     if route.get("proxy") and task.get("target_machine"):
+        # The coordinator runs this task itself (SSH proxy thread); the agent
+        # that happened to poll it is not the owner and must not be fenced
+        # against or have the task reclaimed on its heartbeat.
+        reassign_task(task["id"], f"proxy:{task['target_machine']}")
         _dispatch_proxy_task(task)
         return Response(status_code=204)
 
@@ -232,8 +260,12 @@ def task_heartbeat(task_id: str, body: TaskHeartbeat):
 
 @app.post("/tasks/{task_id}/complete")
 def complete_task_endpoint(task_id: str, body: CompletePayload):
-    task = complete_task(task_id, result_artifact=body.result_artifact,
-                         result_payload=body.result_payload)
+    try:
+        task = complete_task(task_id, result_artifact=body.result_artifact,
+                             result_payload=body.result_payload,
+                             agent_id=body.agent_id)
+    except NotTaskOwner as e:
+        raise HTTPException(409, str(e))
     if not task:
         raise HTTPException(404, "Task not found")
     return task
@@ -241,7 +273,10 @@ def complete_task_endpoint(task_id: str, body: CompletePayload):
 
 @app.post("/tasks/{task_id}/fail")
 def fail_task_endpoint(task_id: str, body: FailPayload):
-    task = fail_task(task_id, body.error, agent_id=body.agent_id)
+    try:
+        task = fail_task(task_id, body.error, agent_id=body.agent_id)
+    except NotTaskOwner as e:
+        raise HTTPException(409, str(e))
     if not task:
         raise HTTPException(404, "Task not found")
     return task
@@ -309,11 +344,12 @@ def list_messages(limit: int = Query(50)):
 @app.get("/a2a/inbox/{agent_id}")
 def get_inbox(agent_id: str, unread_only: bool = Query(True)):
     msgs = get_a2a_inbox(agent_id, unread_only=unread_only)
-    # mark delivered
+    # Mark DIRECTED messages delivered; a broadcast's shared status must not
+    # change on first fetch or legacy status-based readers lose it.
     from .db import get_conn
     conn = get_conn()
     for m in msgs:
-        if m["status"] == "sent":
+        if m["status"] == "sent" and m["to_agent"] is not None:
             conn.execute("UPDATE a2a_messages SET status='delivered' WHERE id=?", (m["id"],))
     conn.commit()
     conn.close()
@@ -321,8 +357,8 @@ def get_inbox(agent_id: str, unread_only: bool = Query(True)):
 
 
 @app.post("/a2a/messages/{msg_id}/ack")
-def ack_message(msg_id: str):
-    ack_a2a_message(msg_id)
+def ack_message(msg_id: str, body: Optional[AckMessage] = None):
+    ack_a2a_message(msg_id, agent_id=body.agent_id if body else None)
     return {"ok": True}
 
 
