@@ -1,5 +1,6 @@
 import json
 import logging
+import os
 import signal
 import socket
 import threading
@@ -57,7 +58,8 @@ class Message:
 
 
 class Agent:
-    def __init__(self, agent_id: str, coordinator_url: str, capabilities: list[str]):
+    def __init__(self, agent_id: str, coordinator_url: str, capabilities: list[str],
+                 token: Optional[str] = None):
         self.agent_id = agent_id
         self.url = coordinator_url.rstrip("/")
         self.capabilities = capabilities
@@ -66,6 +68,12 @@ class Agent:
         self._message_handlers: dict[str, Callable] = {}
         self._heartbeat_thread: Optional[threading.Thread] = None
         self._current_task_id: Optional[str] = None
+        # Shared-secret auth; coordinator enforces it when DIGI_OFFICE_TOKEN
+        # is set on its side. requests.Session applies it to every call.
+        self.token = token or os.environ.get("DIGI_OFFICE_TOKEN")
+        self._http = requests.Session()
+        if self.token:
+            self._http.headers["Authorization"] = f"Bearer {self.token}"
 
     # ── Decorators ────────────────────────────────────────────────────
 
@@ -127,7 +135,7 @@ class Agent:
 
     def claim_task(self) -> Optional[Task]:
         try:
-            resp = requests.get(
+            resp = self._http.get(
                 f"{self.url}/tasks/claim",
                 params={"agent_id": self.agent_id,
                         "capabilities": json.dumps(self.capabilities)},
@@ -142,7 +150,7 @@ class Agent:
 
     def complete_task(self, task_id: str, result: dict):
         try:
-            resp = requests.post(f"{self.url}/tasks/{task_id}/complete",
+            resp = self._http.post(f"{self.url}/tasks/{task_id}/complete",
                                  json={"result_payload": result,
                                        "agent_id": self.agent_id}, timeout=10)
             if resp.status_code == 409:
@@ -153,7 +161,7 @@ class Agent:
 
     def fail_task(self, task_id: str, error: str):
         try:
-            resp = requests.post(f"{self.url}/tasks/{task_id}/fail",
+            resp = self._http.post(f"{self.url}/tasks/{task_id}/fail",
                                  json={"error": error,
                                        "agent_id": self.agent_id}, timeout=10)
             if resp.status_code == 409:
@@ -165,7 +173,7 @@ class Agent:
     def task_progress(self, task_id: str, progress: str, log_entry: str = None):
         """Emit a progress update visible in the dashboard feed."""
         try:
-            requests.post(f"{self.url}/tasks/{task_id}/heartbeat",
+            self._http.post(f"{self.url}/tasks/{task_id}/heartbeat",
                           json={"agent_id": self.agent_id,
                                 "progress": progress,
                                 "log_entry": log_entry or progress},
@@ -188,7 +196,7 @@ class Agent:
         ctx = {"output": {}, "success": True}
         t0 = time.monotonic()
         try:
-            requests.post(f"{self.url}/tasks/{task_id}/tool_call",
+            self._http.post(f"{self.url}/tasks/{task_id}/tool_call",
                           json={"agent_id": self.agent_id,
                                 "tool_name": tool_name,
                                 "tool_input": input_data},
@@ -204,7 +212,7 @@ class Agent:
         finally:
             duration_ms = int((time.monotonic() - t0) * 1000)
             try:
-                requests.post(f"{self.url}/tasks/{task_id}/tool_result",
+                self._http.post(f"{self.url}/tasks/{task_id}/tool_result",
                               json={"agent_id": self.agent_id,
                                     "tool_name": tool_name,
                                     "tool_output": ctx.get("output", {}),
@@ -220,7 +228,7 @@ class Agent:
                      payload: dict, task_id: str = None):
         """Send an A2A message. to_agent=None broadcasts to all."""
         try:
-            requests.post(f"{self.url}/a2a/messages",
+            self._http.post(f"{self.url}/a2a/messages",
                           json={"from_agent": self.agent_id, "to_agent": to_agent,
                                 "message_type": message_type, "payload": payload,
                                 "task_id": task_id},
@@ -231,7 +239,7 @@ class Agent:
     def check_inbox(self) -> list[Message]:
         """Poll inbox and dispatch to registered message handlers."""
         try:
-            resp = requests.get(f"{self.url}/a2a/inbox/{self.agent_id}", timeout=5)
+            resp = self._http.get(f"{self.url}/a2a/inbox/{self.agent_id}", timeout=5)
             if resp.status_code != 200:
                 return []
             msgs = [Message.from_dict(m) for m in resp.json()]
@@ -243,7 +251,7 @@ class Agent:
                         handler(msg)
                     except Exception:
                         logger.exception("Message handler error for %s", msg.message_type)
-                requests.post(f"{self.url}/a2a/messages/{msg.id}/ack",
+                self._http.post(f"{self.url}/a2a/messages/{msg.id}/ack",
                               json={"agent_id": self.agent_id}, timeout=5)
             return msgs
         except Exception as e:
@@ -272,7 +280,7 @@ class Agent:
 
     def _send_heartbeat(self) -> bool:
         try:
-            requests.post(
+            self._http.post(
                 f"{self.url}/agents/{self.agent_id}/heartbeat",
                 json={"agent_id": self.agent_id,
                       "hostname": socket.gethostname(),

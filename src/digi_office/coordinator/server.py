@@ -1,6 +1,8 @@
 import json
 import logging
 import asyncio
+import os
+import secrets
 from contextlib import asynccontextmanager
 from typing import Optional
 
@@ -15,7 +17,8 @@ from .db import (
     send_a2a_message, get_a2a_inbox, ack_a2a_message, get_a2a_recent,
     log_tool_call, log_tool_result, list_dlq, get_dlq_entry,
     requeue_from_dlq, release_task, reclaim_stale_tasks,
-    get_task_attempts, NotTaskOwner,
+    get_task_attempts, NotTaskOwner, reassign_task,
+    reclaim_orphaned_proxy_tasks,
 )
 from .routing import resolve_route
 from .worker_proxy import proxy
@@ -27,11 +30,31 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
+    orphaned = reclaim_orphaned_proxy_tasks()
+    if orphaned:
+        logger.warning("Requeued %d proxy task(s) orphaned by a coordinator restart", orphaned)
     asyncio.create_task(_stale_agent_sweeper())
     yield
 
 
 app = FastAPI(title="Digi-Office Coordinator", version="1.0.0", lifespan=lifespan)
+
+
+@app.middleware("http")
+async def auth_middleware(request: Request, call_next):
+    """
+    Optional shared-secret auth: set DIGI_OFFICE_TOKEN on the coordinator and
+    every agent. Mutating routes (all POSTs, plus /tasks/claim which assigns
+    work) then require `Authorization: Bearer <token>`. Read-only GETs stay
+    open so /health checks and the dashboard keep working. No token set =
+    no auth (backward compatible).
+    """
+    token = os.environ.get("DIGI_OFFICE_TOKEN")
+    if token and (request.method == "POST" or request.url.path == "/tasks/claim"):
+        supplied = request.headers.get("authorization", "")
+        if not secrets.compare_digest(supplied, f"Bearer {token}"):
+            return JSONResponse({"detail": "unauthorized"}, status_code=401)
+    return await call_next(request)
 
 
 async def _stale_agent_sweeper():
@@ -197,6 +220,10 @@ def claim_task_endpoint(
 
     route = resolve_route(task["type"])
     if route.get("proxy") and task.get("target_machine"):
+        # The coordinator runs this task itself (SSH proxy thread); the agent
+        # that happened to poll it is not the owner and must not be fenced
+        # against or have the task reclaimed on its heartbeat.
+        reassign_task(task["id"], f"proxy:{task['target_machine']}")
         _dispatch_proxy_task(task)
         return Response(status_code=204)
 

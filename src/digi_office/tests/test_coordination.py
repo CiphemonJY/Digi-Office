@@ -230,3 +230,109 @@ def test_complete_without_agent_id_still_works():
     r = client.post(f"/tasks/{task['id']}/complete", json={"result_payload": {"v": 1}})
     assert r.status_code == 200
     assert r.json()["status"] == "done"
+
+
+# ── Fix 6: optional shared-secret auth (DIGI_OFFICE_TOKEN) ─────────────────
+
+def test_auth_enforced_when_token_set():
+    os.environ["DIGI_OFFICE_TOKEN"] = "s3cret"
+    try:
+        body = {"type": f"t_{uuid.uuid4().hex[:8]}", "payload": {},
+                "required_capabilities": ["authcap"]}
+        # no token → 401
+        assert client.post("/tasks", json=body).status_code == 401
+        # wrong token → 401
+        r = client.post("/tasks", json=body,
+                        headers={"Authorization": "Bearer wrong"})
+        assert r.status_code == 401
+        # claim (GET, but mutating) → 401
+        r = client.get("/tasks/claim", params={
+            "agent_id": "x", "capabilities": "[]"})
+        assert r.status_code == 401
+        # right token → 201
+        r = client.post("/tasks", json=body,
+                        headers={"Authorization": "Bearer s3cret"})
+        assert r.status_code == 201
+        # read-only routes stay open (health checks, dashboard)
+        assert client.get("/health").status_code == 200
+    finally:
+        del os.environ["DIGI_OFFICE_TOKEN"]
+
+
+def test_no_auth_when_token_unset():
+    assert "DIGI_OFFICE_TOKEN" not in os.environ
+    body = {"type": f"t_{uuid.uuid4().hex[:8]}", "payload": {},
+            "required_capabilities": ["authcap2"]}
+    assert client.post("/tasks", json=body).status_code == 201
+
+
+# ── Fix 7: proxy task ownership ─────────────────────────────────────────────
+# The claim endpoint used to leave proxy-routed tasks assigned to whichever
+# agent happened to poll them, even though a coordinator thread runs the work.
+# That agent's death would reclaim a healthy proxy run, and the proxy's
+# completion could be fenced. Proxy tasks now belong to 'proxy:<machine>'.
+
+def test_proxy_claim_reassigns_to_proxy_owner(monkeypatch):
+    import time as _time
+    from digi_office.coordinator import server as srv
+
+    release = {"go": False}
+
+    def fake_run_task(machine, task_type, payload, timeout=300):
+        while not release["go"]:
+            _time.sleep(0.02)
+        return True, {"proxied": True}
+
+    monkeypatch.setattr(srv.proxy, "run_task", fake_run_task)
+
+    # model_eval routes to dgx_primary with proxy=True; no capability gate.
+    r = client.post("/tasks", json={"type": "model_eval", "payload": {"x": 1}})
+    task_id = r.json()["id"]
+    assert r.json()["target_machine"] == "dgx_primary"
+
+    r = client.get("/tasks/claim", params={
+        "agent_id": "innocent_poller", "capabilities": "[]"})
+    assert r.status_code == 204, "proxy dispatch returns no task to the poller"
+
+    t = db.get_task(task_id)
+    assert t["assigned_to"] == "proxy:dgx_primary", (
+        "proxy task must belong to the proxy, not the polling agent")
+
+    # While the proxy 'runs', the sweeper must not reclaim it even with a
+    # stale claimed_at and no heartbeating 'proxy:dgx_primary' agent.
+    conn = db.get_conn()
+    conn.execute("UPDATE tasks SET claimed_at=? WHERE id=?",
+                 (iso_ago(600), task_id))
+    conn.commit()
+    conn.close()
+    db.reclaim_stale_tasks(threshold_seconds=90)
+    assert db.get_task(task_id)["status"] in ("claimed", "running")
+
+    # Let the proxy finish and verify completion lands.
+    release["go"] = True
+    for _ in range(100):
+        if db.get_task(task_id)["status"] == "done":
+            break
+        _time.sleep(0.05)
+    t = db.get_task(task_id)
+    assert t["status"] == "done"
+    assert t["result"] == {"proxied": True}
+
+
+def test_orphaned_proxy_tasks_requeued_on_startup():
+    """Coordinator died mid-proxy-run: recover at boot via retry/DLQ path."""
+    cap = f"cap_{uuid.uuid4().hex[:6]}"
+    task = submit(cap)
+    conn = db.get_conn()
+    conn.execute(
+        "UPDATE tasks SET status='running', assigned_to='proxy:dgx_primary', claimed_at=? WHERE id=?",
+        (iso_ago(600), task["id"]))
+    conn.commit()
+    conn.close()
+
+    n = db.reclaim_orphaned_proxy_tasks()
+    assert n >= 1
+    t = db.get_task(task["id"])
+    assert t["status"] == "pending"
+    assert t["retries"] == 1
+    assert t["assigned_to"] is None

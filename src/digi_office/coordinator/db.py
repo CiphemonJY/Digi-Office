@@ -727,11 +727,15 @@ def reclaim_stale_tasks(threshold_seconds: int = 90):
     """
     conn = get_conn()
     try:
+        # 'proxy:%' owners are coordinator-internal threads, not heartbeating
+        # agents — the sweeper must not reclaim them mid-run. Crashed proxy
+        # runs are recovered at startup by reclaim_orphaned_proxy_tasks().
         stale_tasks = conn.execute(
             """SELECT t.id FROM tasks t
                LEFT JOIN agents a ON t.assigned_to = a.id
                WHERE t.status IN ('claimed', 'running')
                  AND t.assigned_to IS NOT NULL
+                 AND t.assigned_to NOT LIKE 'proxy:%'
                  AND datetime(t.claimed_at) < datetime('now', ?)
                  AND (a.id IS NULL
                       OR a.online = 0
@@ -747,6 +751,41 @@ def reclaim_stale_tasks(threshold_seconds: int = 90):
     for row in stale_tasks:
         fail_task(row["id"], "reclaimed: assigned agent went stale")
     return len(stale_tasks)
+
+def reassign_task(task_id: str, new_owner: str) -> None:
+    """
+    Hand a claimed task to a different owner. Used when the claim endpoint
+    dispatches a proxy-routed task: the polling agent that happened to claim
+    it never executes it, so leaving it as the owner corrupted ownership
+    accounting (fencing, reclaim, dashboards).
+    """
+    conn = get_conn()
+    conn.execute("UPDATE tasks SET assigned_to=? WHERE id=?", (new_owner, task_id))
+    log_event(conn, task_id, "reassigned", details=f"owner={new_owner}")
+    conn.commit()
+    conn.close()
+
+
+def reclaim_orphaned_proxy_tasks() -> int:
+    """
+    Proxy tasks run on daemon threads inside the coordinator process; if the
+    coordinator dies mid-run those tasks are stuck in claimed/running with a
+    'proxy:%' owner that no longer exists. Called once at startup — any such
+    task is, by construction, dead. Routes through fail_task for retry/DLQ.
+    """
+    conn = get_conn()
+    try:
+        rows = conn.execute(
+            """SELECT id FROM tasks
+               WHERE status IN ('claimed', 'running')
+                 AND assigned_to LIKE 'proxy:%'""",
+        ).fetchall()
+    finally:
+        conn.close()
+    for row in rows:
+        fail_task(row["id"], "coordinator restarted during proxy execution")
+    return len(rows)
+
 
 # ── Task attempt history helpers ────────────────────────────────────────
 
