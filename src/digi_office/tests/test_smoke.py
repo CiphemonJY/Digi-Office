@@ -11,7 +11,11 @@ import uuid
 import pytest
 import requests
 
-BASE = os.environ.get("COORDINATOR_URL", "http://100.119.15.111:8080")
+if "COORDINATOR_URL" not in os.environ:
+    pytest.skip("smoke tests need a live coordinator — set COORDINATOR_URL",
+                allow_module_level=True)
+
+BASE = os.environ["COORDINATOR_URL"]
 
 
 def url(path):

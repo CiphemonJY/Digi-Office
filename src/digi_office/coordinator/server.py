@@ -15,7 +15,7 @@ from .db import (
     send_a2a_message, get_a2a_inbox, ack_a2a_message, get_a2a_recent,
     log_tool_call, log_tool_result, list_dlq, get_dlq_entry,
     requeue_from_dlq, release_task, reclaim_stale_tasks,
-    get_task_attempts,
+    get_task_attempts, NotTaskOwner,
 )
 from .routing import resolve_route
 from .worker_proxy import proxy
@@ -64,6 +64,7 @@ class HeartbeatPayload(BaseModel):
 class CompletePayload(BaseModel):
     result_artifact: Optional[str] = None
     result_payload: Optional[dict] = None
+    agent_id: Optional[str] = None
 
 
 class FailPayload(BaseModel):
@@ -86,7 +87,7 @@ class A2AMessage(BaseModel):
 
 
 class AckMessage(BaseModel):
-    pass
+    agent_id: Optional[str] = None
 
 
 class ToolCallStart(BaseModel):
@@ -232,8 +233,12 @@ def task_heartbeat(task_id: str, body: TaskHeartbeat):
 
 @app.post("/tasks/{task_id}/complete")
 def complete_task_endpoint(task_id: str, body: CompletePayload):
-    task = complete_task(task_id, result_artifact=body.result_artifact,
-                         result_payload=body.result_payload)
+    try:
+        task = complete_task(task_id, result_artifact=body.result_artifact,
+                             result_payload=body.result_payload,
+                             agent_id=body.agent_id)
+    except NotTaskOwner as e:
+        raise HTTPException(409, str(e))
     if not task:
         raise HTTPException(404, "Task not found")
     return task
@@ -241,7 +246,10 @@ def complete_task_endpoint(task_id: str, body: CompletePayload):
 
 @app.post("/tasks/{task_id}/fail")
 def fail_task_endpoint(task_id: str, body: FailPayload):
-    task = fail_task(task_id, body.error, agent_id=body.agent_id)
+    try:
+        task = fail_task(task_id, body.error, agent_id=body.agent_id)
+    except NotTaskOwner as e:
+        raise HTTPException(409, str(e))
     if not task:
         raise HTTPException(404, "Task not found")
     return task
@@ -309,11 +317,12 @@ def list_messages(limit: int = Query(50)):
 @app.get("/a2a/inbox/{agent_id}")
 def get_inbox(agent_id: str, unread_only: bool = Query(True)):
     msgs = get_a2a_inbox(agent_id, unread_only=unread_only)
-    # mark delivered
+    # Mark DIRECTED messages delivered; a broadcast's shared status must not
+    # change on first fetch or legacy status-based readers lose it.
     from .db import get_conn
     conn = get_conn()
     for m in msgs:
-        if m["status"] == "sent":
+        if m["status"] == "sent" and m["to_agent"] is not None:
             conn.execute("UPDATE a2a_messages SET status='delivered' WHERE id=?", (m["id"],))
     conn.commit()
     conn.close()
@@ -321,8 +330,8 @@ def get_inbox(agent_id: str, unread_only: bool = Query(True)):
 
 
 @app.post("/a2a/messages/{msg_id}/ack")
-def ack_message(msg_id: str):
-    ack_a2a_message(msg_id)
+def ack_message(msg_id: str, body: Optional[AckMessage] = None):
+    ack_a2a_message(msg_id, agent_id=body.agent_id if body else None)
     return {"ok": True}
 
 

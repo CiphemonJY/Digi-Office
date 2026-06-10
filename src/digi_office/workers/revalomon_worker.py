@@ -20,7 +20,11 @@ import sys
 import time
 from pathlib import Path
 
-VENV_PYTHON = "/home/jy/lisa_coord_venv/bin/python"
+# Per-machine config via env; the previous hardcoded path (and an undefined
+# LISA_FTM_ROOT that raised NameError in every handler) made this worker
+# fail all tasks on any host but the original author's.
+VENV_PYTHON = os.environ.get("LISA_VENV_PYTHON", sys.executable)
+LISA_FTM_ROOT = Path(os.environ.get("LISA_FTM_ROOT", "~/LISA_FTM")).expanduser()
 
 
 from digi_office.agent_sdk.agent import Agent
@@ -35,6 +39,33 @@ logger = logging.getLogger("revalomon_worker")
 
 # ── Task handlers ────────────────────────────────────────────────────────────────
 
+def _subprocess_result(result: subprocess.CompletedProcess) -> dict:
+    """
+    Normalize a subprocess outcome. A non-zero exit must FAIL the task —
+    previously the stdout/stderr dict was returned regardless, so crashed
+    eval scripts were recorded as status='done' (Sprint 5.5).
+    Also surfaces the script's final JSON line as 'metrics' when present,
+    so the coordinator stores structured results, not just log tails.
+    """
+    out = {
+        "stdout": result.stdout[-3000:],
+        "stderr": result.stderr[-2000:],
+        "returncode": result.returncode,
+    }
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"script exited {result.returncode}: {result.stderr[-800:] or result.stdout[-800:]}")
+    for line in reversed(result.stdout.strip().splitlines()):
+        line = line.strip()
+        if line.startswith("{") and line.endswith("}"):
+            try:
+                out["metrics"] = json.loads(line)
+            except ValueError:
+                pass
+            break
+    return out
+
+
 def handle_sprint_gate(agent: Agent, task):
     """Run perplexity gate evaluation on held-out data."""
     payload = task.payload or {}
@@ -45,14 +76,6 @@ def handle_sprint_gate(agent: Agent, task):
 
     agent.task_progress(task.id, f"gate_eval", f"model={model} n_samples={n_samples} ckpt={checkpoint}")
 
-    cmd = [
-        VENV_PYTHON, "-m", "uvicorn",
-        "digi_office.coordinator.server:app",
-        "--host", "0.0.0.0", "--port", "8080",
-    ]
-
-    # For now, run the gate eval inline via a subprocess
-    # Gate eval uses fedavg_vs_lisafedavg.py or a dedicated eval script
     script = LISA_FTM_ROOT / "eval" / "gate_eval.py"
     cmd = [
         VENV_PYTHON, str(script),
@@ -64,11 +87,7 @@ def handle_sprint_gate(agent: Agent, task):
 
     agent.task_progress(task.id, "running_gate", " ".join(cmd))
     result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
-    return {
-        "stdout": result.stdout[-2000:],
-        "stderr": result.stderr[-2000:],
-        "returncode": result.returncode,
-    }
+    return _subprocess_result(result)
 
 
 def handle_sprint_byzantine(agent: Agent, task):
@@ -100,11 +119,7 @@ def handle_sprint_byzantine(agent: Agent, task):
 
     agent.task_progress(task.id, "running_byzantine", " ".join(cmd))
     result = subprocess.run(cmd, capture_output=True, text=True, timeout=3600)
-    return {
-        "stdout": result.stdout[-2000:],
-        "stderr": result.stderr[-2000:],
-        "returncode": result.returncode,
-    }
+    return _subprocess_result(result)
 
 
 def handle_sprint_heatmap(agent: Agent, task):
@@ -121,11 +136,7 @@ def handle_sprint_heatmap(agent: Agent, task):
     cmd = [VENV_PYTHON, str(script), "--checkpoint", checkpoint, "--out", output_dir]
     agent.task_progress(task.id, "running_heatmap", " ".join(cmd))
     result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
-    return {
-        "stdout": result.stdout[-2000:],
-        "stderr": result.stderr[-2000:],
-        "returncode": result.returncode,
-    }
+    return _subprocess_result(result)
 
 
 def handle_generic_eval(agent: Agent, task):
@@ -148,11 +159,7 @@ def handle_generic_eval(agent: Agent, task):
     cmd = [VENV_PYTHON, str(script_path)] + args
     agent.task_progress(task.id, "running", " ".join(cmd))
     result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
-    return {
-        "stdout": result.stdout[-3000:],
-        "stderr": result.stderr[-2000:],
-        "returncode": result.returncode,
-    }
+    return _subprocess_result(result)
 
 
 # ── Message handlers ───────────────────────────────────────────────────────────

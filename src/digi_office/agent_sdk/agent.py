@@ -87,14 +87,29 @@ class Agent:
     def register(self) -> bool:
         return self._send_heartbeat()
 
-    def run(self, poll_interval: int = 5):
+    def run(self, poll_interval: int = 5, register_retries: int = 0):
+        """
+        Main loop. register_retries=0 retries forever with capped backoff —
+        an agent must survive the coordinator restarting or coming up later,
+        not exit and leave its host out of the fleet until someone notices.
+        """
         self.running = True
         signal.signal(signal.SIGTERM, self._handle_sigterm)
         signal.signal(signal.SIGINT, self._handle_sigterm)
 
-        if not self.register():
-            logger.error("Registration failed — coordinator unreachable at %s", self.url)
-            return
+        attempt = 0
+        backoff = 2
+        while not self.register():
+            attempt += 1
+            if register_retries and attempt >= register_retries:
+                logger.error("Registration failed after %d attempts — giving up (%s)",
+                             attempt, self.url)
+                return
+            if not self.running:
+                return
+            logger.warning("Coordinator unreachable at %s — retrying in %ds", self.url, backoff)
+            time.sleep(backoff)
+            backoff = min(backoff * 2, 60)
 
         logger.info("Agent %s registered. Polling every %ds", self.agent_id, poll_interval)
         self._start_heartbeat_thread()
@@ -127,15 +142,23 @@ class Agent:
 
     def complete_task(self, task_id: str, result: dict):
         try:
-            requests.post(f"{self.url}/tasks/{task_id}/complete",
-                          json={"result_payload": result}, timeout=10)
+            resp = requests.post(f"{self.url}/tasks/{task_id}/complete",
+                                 json={"result_payload": result,
+                                       "agent_id": self.agent_id}, timeout=10)
+            if resp.status_code == 409:
+                logger.error("Task %s was reassigned while we ran it — result discarded "
+                             "by coordinator (fencing). %s", task_id[:8], resp.text)
         except Exception as e:
             logger.warning("complete_task failed: %s", e)
 
     def fail_task(self, task_id: str, error: str):
         try:
-            requests.post(f"{self.url}/tasks/{task_id}/fail",
-                          json={"error": error}, timeout=10)
+            resp = requests.post(f"{self.url}/tasks/{task_id}/fail",
+                                 json={"error": error,
+                                       "agent_id": self.agent_id}, timeout=10)
+            if resp.status_code == 409:
+                logger.error("Task %s was reassigned while we ran it — failure report "
+                             "discarded by coordinator (fencing).", task_id[:8])
         except Exception as e:
             logger.warning("fail_task failed: %s", e)
 
@@ -220,7 +243,8 @@ class Agent:
                         handler(msg)
                     except Exception:
                         logger.exception("Message handler error for %s", msg.message_type)
-                requests.post(f"{self.url}/a2a/messages/{msg.id}/ack", timeout=5)
+                requests.post(f"{self.url}/a2a/messages/{msg.id}/ack",
+                              json={"agent_id": self.agent_id}, timeout=5)
             return msgs
         except Exception as e:
             logger.debug("check_inbox failed: %s", e)
