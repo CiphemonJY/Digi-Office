@@ -319,6 +319,23 @@ def test_proxy_claim_reassigns_to_proxy_owner(monkeypatch):
     assert t["result"] == {"proxied": True}
 
 
+# ── Pixel office view + static sprite mount ────────────────────────────────
+
+def test_office_page_served():
+    r = client.get("/office")
+    assert r.status_code == 200
+    assert "DIGI-OFFICE" in r.text and "pixel" in r.text.lower()
+
+
+def test_sprites_static_mounted():
+    """The dashboard always fetched /sprites/sprites.json but the static dir
+    was never mounted — PNG sprites silently 404'd forever."""
+    r = client.get("/sprites/sprites.json")
+    assert r.status_code == 200
+    cfg = r.json()
+    assert "sprites" in cfg
+
+
 def test_orphaned_proxy_tasks_requeued_on_startup():
     """Coordinator died mid-proxy-run: recover at boot via retry/DLQ path."""
     cap = f"cap_{uuid.uuid4().hex[:6]}"
