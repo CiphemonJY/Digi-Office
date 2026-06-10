@@ -1,0 +1,449 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Digi-Office — Pixel Office</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#0b0d14;--surface:#141720;--border:#252a3a;
+  --accent:#5b8af5;--green:#3ecf8e;--red:#ff5c5c;--yellow:#f5a623;
+  --cyan:#06b6d4;--text:#e2e8f0;--muted:#8892a4;
+}
+html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);
+  font-family:'Courier New',monospace}
+#header{display:flex;align-items:center;justify-content:space-between;
+  padding:8px 16px;border-bottom:1px solid var(--border);background:var(--surface)}
+#header h1{font-size:.95rem;letter-spacing:1px}
+#header .right{display:flex;gap:14px;align-items:center;font-size:.74rem}
+.stat{color:var(--muted)} .stat b{color:var(--text);font-size:.9rem}
+.stat.s-pend b{color:var(--yellow)} .stat.s-run b{color:var(--accent)}
+.stat.s-done b{color:var(--green)} .stat.s-dlq b{color:var(--red)}
+#conn{font-size:.68rem;padding:2px 8px;border-radius:10px;font-weight:700;
+  background:rgba(62,207,142,.15);color:var(--green)}
+#conn.off{background:rgba(255,92,92,.15);color:var(--red)}
+a.btn{color:var(--muted);border:1px solid var(--border);border-radius:5px;
+  padding:3px 10px;text-decoration:none;font-size:.72rem}
+a.btn:hover{color:var(--text)}
+#stage-wrap{display:flex;justify-content:center;align-items:center;
+  height:calc(100% - 84px);padding:8px}
+canvas#office{image-rendering:pixelated;image-rendering:crisp-edges;
+  max-width:100%;max-height:100%;border:1px solid var(--border);border-radius:6px;
+  background:#0e1018}
+#ticker{height:30px;border-top:1px solid var(--border);background:var(--surface);
+  display:flex;align-items:center;padding:0 14px;font-size:.72rem;color:var(--muted);
+  white-space:nowrap;overflow:hidden}
+#ticker .tk{margin-right:28px} .tk b{color:var(--text)}
+.tk.t-done b{color:var(--green)} .tk.t-fail b{color:var(--red)}
+.tk.t-claim b{color:var(--accent)} .tk.t-a2a b{color:var(--cyan)}
+</style>
+</head>
+<body>
+<div id="header">
+  <h1>🏢 DIGI-OFFICE <span style="color:var(--muted);font-size:.7rem">pixel office</span></h1>
+  <div class="right">
+    <span class="stat s-pend">INBOX <b id="st-pend">0</b></span>
+    <span class="stat s-run">WORKING <b id="st-run">0</b></span>
+    <span class="stat s-done">DONE <b id="st-done">0</b></span>
+    <span class="stat s-dlq">DLQ <b id="st-dlq">0</b></span>
+    <span class="stat">AGENTS <b id="st-agents">0</b></span>
+    <span id="conn">LIVE</span>
+    <a class="btn" href="/dashboard">data view →</a>
+  </div>
+</div>
+<div id="stage-wrap"><canvas id="office" width="960" height="540"></canvas></div>
+<div id="ticker"><span class="tk">booting office…</span></div>
+
+<script>
+"use strict";
+// ════════════════════════════════════════════════════════════════════
+//  DIGI-OFFICE PIXEL OFFICE
+//  One scene: agents at desks, tasks flow inbox → desk → done/DLQ.
+//  PNG sprite sheets from /sprites/ when available (48x48, rows =
+//  idle/work/sleep/tool, 2 frames); procedural pixel creature fallback.
+// ════════════════════════════════════════════════════════════════════
+const cv = document.getElementById('office'), ctx = cv.getContext('2d');
+const W = cv.width, H = cv.height;
+ctx.imageSmoothingEnabled = false;
+
+// ── Layout constants ────────────────────────────────────────────────
+const WALL_H = 104;
+const INBOX  = {x: 26,  y: 168, w: 86, h: 360};   // left tray column
+const OUTTRAY= {x: 848, y: 168, w: 86, h: 170};   // done tray
+const DLQBIN = {x: 848, y: 396, w: 86, h: 130};   // dead letter cabinet
+const RACK   = {x: 700, y: 16,  w: 150, h: 80};   // server rack on wall (proxy tasks)
+const DESKAREA = {x: 132, y: 130, w: 700, h: 396};
+
+// ── State ───────────────────────────────────────────────────────────
+let agents = [], tasks = [], dlqCount = 0, feedSince = 0;
+let prevStatus = {};            // task_id → status (for transitions)
+let flights = [];               // animated cards/envelopes
+let bubbles = {};               // agent_id → {text,until,color}
+let toolGlow = {};              // agent_id → until (tool aura)
+let connOK = true, tick = 0, firstPoll = true;
+let doneToday = 0;
+
+// ── Sprite sheets (PNG) ─────────────────────────────────────────────
+const sheets = {}; let agentMap = {};
+(async () => {
+  try {
+    const r = await fetch('/sprites/sprites.json'); if (!r.ok) return;
+    const cfgAll = await r.json(); agentMap = cfgAll.agentMap || {};
+    for (const [id, cfg] of Object.entries(cfgAll.sprites || {})) {
+      const img = new Image();
+      img.onload = () => sheets[id] = {img, cfg};
+      img.src = '/' + (cfg.sheet || '').replace(/^\//, '');
+    }
+  } catch(e) {/* procedural fallback */}
+})();
+
+function sheetFor(agentId) {
+  const id = (agentId || '').toLowerCase();
+  if (sheets[agentMap[id]]) return sheets[agentMap[id]];
+  if (sheets[id]) return sheets[id];
+  for (const k of Object.keys(sheets)) if (id.startsWith(k) || k.startsWith(id.replace(/mon$/,''))) return sheets[k];
+  return sheets[agentMap['default']] || sheets['worker'] || null;
+}
+
+// ── Procedural fallback creature (12x12 fat-pixel critter) ─────────
+function hashHue(s){let h=0;for(const c of s)h=(h*31+c.charCodeAt(0))>>>0;return h%360}
+function drawCritter(x, y, agentId, state, frame) {
+  const hue = hashHue(agentId||'?');
+  const body = `hsl(${hue},62%,52%)`, dark = `hsl(${hue},62%,34%)`, lite = `hsl(${hue},70%,72%)`;
+  const P = 4;                                   // fat pixel
+  const bob = (state==='sleep') ? 0 : (frame ? 1 : 0);
+  const px = (cx,cy,c)=>{ctx.fillStyle=c;ctx.fillRect(x+cx*P, y+(cy+bob)*P, P, P);};
+  // body blob
+  for(let r=4;r<10;r++)for(let c=2;c<10;c++)px(c,r,body);
+  for(let c=3;c<9;c++)px(c,3,body);
+  for(let c=2;c<10;c++)px(c,10,dark);            // base shadow
+  px(2,3,dark);px(9,3,dark);
+  // ears/antenna by hue
+  if(hue%3===0){px(3,2,body);px(8,2,body);px(3,1,lite);px(8,1,lite);}
+  else if(hue%3===1){px(5,2,lite);px(6,1,lite);}
+  else {px(2,2,body);px(9,2,body);}
+  // face
+  if(state==='sleep'){px(4,5,'#0f172a');px(7,5,'#0f172a');}     // closed dashes
+  else {px(4,5,'#fff');px(7,5,'#fff');px(4,6,'#0f172a');px(7,6,'#0f172a');}
+  if(state==='work'&&frame){px(4,6,'#06b6d4');px(7,6,'#06b6d4');}  // focus glint
+  px(5,8,dark);px(6,8,dark);                     // mouth
+  // arms: typing when working
+  if(state==='work'){const a=frame?7:8; px(1,a,body); px(10,15-a,body);}
+  else {px(1,7,body);px(10,7,body);}
+  // belly mark
+  px(5,7,lite);px(6,7,lite);
+}
+
+function drawAgentSprite(x, y, agent, state, scale) {
+  const fps = state==='work' ? 7 : state==='sleep' ? 1.2 : 3;
+  const frame = Math.floor(tick * fps / 60) % 2;
+  const s = sheetFor(agent.id);
+  if (s) {
+    const st = s.cfg.states[state] || s.cfg.states.idle;
+    const fw = s.cfg.frameWidth||48, fh = s.cfg.frameHeight||48;
+    const col = frame % (st.frames||1);
+    ctx.drawImage(s.img, col*fw, st.row*fh, fw, fh, x, y, fw*scale, fh*scale);
+  } else {
+    drawCritter(x, y, agent.id, state, frame);
+  }
+  if (state==='sleep') {                          // ZZZ
+    const off=(tick%80)/80;
+    ctx.font='bold 11px monospace'; ctx.fillStyle='#94a3b8'; ctx.globalAlpha=.85-off*.5;
+    ctx.fillText('z', x+52, y+6-off*14);
+    ctx.font='bold 8px monospace'; ctx.globalAlpha=.5;
+    ctx.fillText('z', x+60, y-2-off*9); ctx.globalAlpha=1;
+  }
+  if (toolGlow[agent.id] && Date.now()<toolGlow[agent.id]) {  // tool aura
+    const pulse=Math.sin(tick*0.25)*.2+.3;
+    ctx.globalAlpha=pulse; ctx.fillStyle='#a855f7';
+    ctx.fillRect(x-4,y-4,56,56); ctx.globalAlpha=1;
+  }
+}
+
+// ── Office furniture ────────────────────────────────────────────────
+function rect(x,y,w,h,c){ctx.fillStyle=c;ctx.fillRect(x,y,w,h);}
+function text(t,x,y,c,size,bold){ctx.font=`${bold?'bold ':''}${size||10}px monospace`;ctx.fillStyle=c;ctx.fillText(t,x,y);}
+
+function drawRoom() {
+  // wall
+  rect(0,0,W,WALL_H,'#1d2233');
+  for(let x=0;x<W;x+=32) rect(x,0,1,WALL_H,'rgba(255,255,255,.025)');
+  rect(0,WALL_H-6,W,6,'#2a3047');                          // skirting
+  // floor: checker tiles
+  for(let ty=WALL_H; ty<H; ty+=24) for(let tx=0; tx<W; tx+=24)
+    rect(tx,ty,24,24, ((tx/24+ty/24)%2)?'#171b28':'#151927');
+  // window with animated sky
+  rect(60,14,150,66,'#0f172a'); rect(64,18,142,58,'#16243f');
+  const sx=64+((tick/6)%170)-14;                           // drifting cloud
+  rect(Math.max(64,Math.min(sx,180)),30,26,7,'#33415c'); rect(Math.max(64,Math.min(sx+6,186)),26,16,6,'#33415c');
+  rect(70,64,130,3,'#0ea5e9'); ctx.globalAlpha=.25; rect(70,40,130,24,'#0ea5e9'); ctx.globalAlpha=1;
+  rect(133,18,4,58,'#0f172a'); rect(64,45,142,4,'#0f172a');
+  // sign
+  text('DIGI-OFFICE',262,40,'#5b8af5',16,true); text('federated learning division',262,56,'#475572',9);
+  // clock
+  const now=new Date();
+  rect(560,24,66,28,'#0f172a'); rect(562,26,62,24,'#101626');
+  text(now.toTimeString().slice(0,8),568,43,'#3ecf8e',12,true);
+  // plant
+  rect(36,WALL_H-34,16,12,'#7c4a22'); rect(40,WALL_H-52,8,20,'#1f7a3d');
+  rect(32,WALL_H-46,10,8,'#27964c'); rect(48,WALL_H-48,10,8,'#27964c');
+  // coffee machine
+  rect(630,40,40,56,'#2a3047'); rect(636,48,28,20,'#0f172a');
+  text('café',639,62,'#f5a623',9);
+  rect(644,72,12,4,'#94a3b8');
+  if(tick%90<45){ctx.globalAlpha=.5;text('~',650,38-((tick%45)/8),'#94a3b8',10);ctx.globalAlpha=1;}
+}
+
+function drawInbox(pending) {
+  rect(INBOX.x,INBOX.y,INBOX.w,14,'#3a4258'); rect(INBOX.x,INBOX.y+14,INBOX.w,6,'#2a3047');
+  text('INBOX',INBOX.x+18,INBOX.y+11,'#cbd5e1',10,true);
+  // stacked cards (cap display at 14)
+  const n=Math.min(pending.length,14);
+  for(let i=0;i<n;i++){
+    const cy=INBOX.y+34+i*13, wob=(i===n-1&&tick%60<30)?1:0;
+    rect(INBOX.x+8+(i%3)*4,cy+wob,58,11,'#f1f5f9');
+    rect(INBOX.x+8+(i%3)*4,cy+wob,58,3,priColor(pending[i]));
+    rect(INBOX.x+12+(i%3)*4,cy+6+wob,40,1,'#94a3b8');
+  }
+  if(pending.length>14) text('+'+(pending.length-14),INBOX.x+26,INBOX.y+34+14*13+12,'#f5a623',11,true);
+  text(pending.length+' pending',INBOX.x+6,INBOX.y+INBOX.h-6,'#8892a4',9);
+}
+function priColor(t){return (t&&t.priority>=3)?'#ff5c5c':(t&&t.priority===2)?'#f5a623':'#5b8af5';}
+
+function drawOutTray() {
+  rect(OUTTRAY.x,OUTTRAY.y,OUTTRAY.w,14,'#2c4a3a'); text('DONE ✓',OUTTRAY.x+14,OUTTRAY.y+11,'#3ecf8e',10,true);
+  const n=Math.min(doneToday,9);
+  for(let i=0;i<n;i++){rect(OUTTRAY.x+10+(i%2)*5,OUTTRAY.y+26+i*9,56,7,'#d9f5e8');rect(OUTTRAY.x+10+(i%2)*5,OUTTRAY.y+26+i*9,56,2,'#3ecf8e');}
+  text(doneToday+' this session',OUTTRAY.x+2,OUTTRAY.y+OUTTRAY.h-4,'#8892a4',8);
+}
+function drawDLQ() {
+  rect(DLQBIN.x+8,DLQBIN.y+22,70,88,'#3b2430'); rect(DLQBIN.x+8,DLQBIN.y+22,70,8,'#54344a');
+  rect(DLQBIN.x+14,DLQBIN.y+38,58,20,'#2a1a24'); rect(DLQBIN.x+14,DLQBIN.y+64,58,20,'#2a1a24');
+  rect(DLQBIN.x+38,DLQBIN.y+44,12,4,'#94a3b8'); rect(DLQBIN.x+38,DLQBIN.y+70,12,4,'#94a3b8');
+  text('DLQ',DLQBIN.x+30,DLQBIN.y+16,'#ff5c5c',11,true);
+  if(dlqCount>0){text(dlqCount+'',DLQBIN.x+36,DLQBIN.y+102,'#ff5c5c',13,true);
+    if(tick%50<25){ctx.globalAlpha=.6;text('!',DLQBIN.x+70,DLQBIN.y+14,'#ff5c5c',12,true);ctx.globalAlpha=1;}}
+}
+
+function drawRack(proxyTasks) {
+  rect(RACK.x,RACK.y,RACK.w,RACK.h,'#10141f'); rect(RACK.x+2,RACK.y+2,RACK.w-4,RACK.h-4,'#171c2b');
+  text('DGX / EDGE RACK',RACK.x+10,RACK.y+14,'#475572',9,true);
+  const rows=['dgx_primary','dgx_secondary','jetson'];
+  rows.forEach((m,i)=>{
+    const ry=RACK.y+22+i*18;
+    rect(RACK.x+8,ry,RACK.w-16,14,'#0c0f18');
+    text(m.replace('_',' '),RACK.x+14,ry+10,'#5b6a8a',8);
+    const busy = proxyTasks.some(t=>(t.assigned_to||'')==='proxy:'+m);
+    for(let l=0;l<5;l++){
+      const on = busy ? ((tick+l*7)%22<11) : (l===0);
+      rect(RACK.x+RACK.w-22-l*9,ry+4,5,5, on?(busy?'#3ecf8e':'#2c4a3a'):'#1d2233');
+    }
+    if(busy) text('●rec',RACK.x+RACK.w-60,ry+10,'#ff5c5c',7);
+  });
+}
+
+// ── Desks ───────────────────────────────────────────────────────────
+function deskSlots(n) {
+  const cols = n<=3 ? n||1 : n<=6 ? 3 : 4;
+  const rows = Math.ceil(Math.max(n,1)/cols);
+  const cw = DESKAREA.w/cols, ch = Math.min(DESKAREA.h/rows, 200);
+  const out=[];
+  for(let i=0;i<n;i++){
+    const c=i%cols, r=Math.floor(i/cols);
+    out.push({x: DESKAREA.x+c*cw+cw/2-62, y: DESKAREA.y+r*ch+ch-66});
+  }
+  return out;
+}
+
+function drawDesk(slot, agent, task) {
+  const {x,y}=slot;
+  const online = !!agent.online;
+  const working = !!task;
+  const state = !online ? 'sleep' : working ? (toolGlow[agent.id]&&Date.now()<toolGlow[agent.id]?'tool':'work') : 'idle';
+
+  // chair + agent behind desk
+  rect(x+38,y+6,48,10,'#232839');
+  drawAgentSprite(x+38, y-40, agent, state, 1);
+  // desk
+  rect(x,y+14,124,12,'#6b4a2c'); rect(x,y+26,124,4,'#54391f');
+  rect(x+8,y+30,8,18,'#3b2a18'); rect(x+108,y+30,8,18,'#3b2a18');
+  // monitor
+  rect(x+10,y-8,40,26,'#10141f'); rect(x+13,y-5,34,18,working?'#12263f':'#0c0f18');
+  if(working){                                            // code scrolling
+    for(let l=0;l<4;l++){const lw=8+((tick/4+l*13+hashHue(agent.id))%22);
+      rect(x+15,y-2+l*4,lw,2, l%2?'#3ecf8e':'#5b8af5');}
+  } else if(online && tick%160<8) rect(x+13,y-5,34,18,'#16243f'); // idle flicker
+  rect(x+26,y+18,8,4,'#252a3a');
+  // task card on desk
+  if(working){
+    rect(x+58,y+4,58,16,'#f1f5f9'); rect(x+58,y+4,58,4,priColor(task));
+    text(shortType(task.type),x+61,y+16,'#1e293b',8,true);
+  }
+  // mug
+  rect(x+100,y+6,9,8,'#b45309'); rect(x+109,y+8,3,4,'#b45309');
+  if(working&&tick%70<35){ctx.globalAlpha=.4;text('~',x+101,y+2-((tick%35)/10),'#94a3b8',8);ctx.globalAlpha=1;}
+  // nameplate
+  const nm=agent.id.length>14?agent.id.slice(0,13)+'…':agent.id;
+  rect(x+18,y+34,90,14,'#0f172a');
+  text(nm,x+24,y+44, online?'#e2e8f0':'#64748b',9,true);
+  rect(x+20,y+38,5,5, online?'#3ecf8e':'#475569');
+  // status line under nameplate
+  if(working) text(runtimeOf(task),x+24,y+58,'#f5a623',8);
+  else if(!online) text('offline',x+24,y+58,'#64748b',8);
+  // speech bubble (A2A)
+  const b=bubbles[agent.id];
+  if(b&&Date.now()<b.until){
+    const t=b.text.slice(0,16), tw=t.length*6+10;
+    rect(x+30,y-62,tw,14,b.color||'rgba(6,182,212,.92)');
+    rect(x+40,y-48,5,4,b.color||'rgba(6,182,212,.92)');
+    text(t,x+35,y-52,'#fff',8,true);
+  }
+}
+function shortType(t){t=t||'';return t.length>11?t.slice(0,10)+'…':t;}
+function runtimeOf(task){
+  if(!task.claimed_at) return '';
+  const s=Math.max(0,(Date.now()-Date.parse(task.claimed_at))/1000)|0;
+  return '⚒ '+(s>=3600?((s/3600)|0)+'h'+(((s%3600)/60)|0)+'m':s>=60?((s/60)|0)+'m'+(s%60)+'s':s+'s');
+}
+
+// ── Flights (animated cards / envelopes) ────────────────────────────
+function fly(x0,y0,x1,y1,kind,label,color,dur){
+  flights.push({x0,y0,x1,y1,kind,label:label||'',color:color||'#f1f5f9',t0:performance.now(),dur:dur||900});
+}
+function drawFlights(){
+  const now=performance.now();
+  flights=flights.filter(f=>now-f.t0<f.dur);
+  for(const f of flights){
+    const p=(now-f.t0)/f.dur, e=p<.5?2*p*p:1-Math.pow(-2*p+2,2)/2;  // easeInOut
+    const x=f.x0+(f.x1-f.x0)*e, y=f.y0+(f.y1-f.y0)*e - Math.sin(p*Math.PI)*46;
+    if(f.kind==='card'){
+      rect(x,y,46,14,'#f1f5f9'); rect(x,y,46,4,f.color);
+      text(f.label.slice(0,8),x+3,y+11,'#1e293b',7,true);
+    } else if(f.kind==='redcard'){
+      rect(x,y,46,14,'#fecaca'); rect(x,y,46,4,'#ff5c5c');
+      text(f.label.slice(0,8),x+3,y+11,'#7f1d1d',7,true);
+    } else {                                              // envelope
+      rect(x,y,18,12,'#e8eefc'); ctx.strokeStyle='#5b8af5';
+      ctx.beginPath();ctx.moveTo(x,y);ctx.lineTo(x+9,y+7);ctx.lineTo(x+18,y);ctx.stroke();
+      rect(x,y,18,2,'#5b8af5');
+    }
+  }
+}
+
+// ── Data polling ────────────────────────────────────────────────────
+const deskOf = {};   // agent_id → slot (rebuilt each frame)
+async function jget(u){const r=await fetch(u);if(!r.ok)throw 0;return r.json();}
+
+async function poll(){
+  try{
+    const [ag,pend,claimed,running,dlq] = await Promise.all([
+      jget('/agents'), jget('/tasks?status=pending&limit=100'),
+      jget('/tasks?status=claimed&limit=50'), jget('/tasks?status=running&limit=50'),
+      jget('/dlq?limit=1'),
+    ]);
+    agents=ag; dlqCount=dlq.length?await (async()=>{const d=await jget('/dlq?limit=200');return d.length;})():0;
+    const active=[...claimed,...running];
+    tasks={pending:pend, active};
+
+    // transitions → flights
+    const cur={}; pend.forEach(t=>cur[t.id]='pending'); active.forEach(t=>cur[t.id]=t.status);
+    if(!firstPoll){
+      for(const t of active){
+        if(prevStatus[t.id]==='pending'||!(t.id in prevStatus)){       // claimed!
+          const d=deskOf[(t.assigned_to||'')]; const own=t.assigned_to||'';
+          const dst = own.startsWith('proxy:') ? {x:RACK.x+60,y:RACK.y+40} : d?{x:d.x+58,y:d.y+4}:null;
+          if(dst) fly(INBOX.x+20,INBOX.y+40,dst.x,dst.y,'card',t.type,priColor(t));
+          tick0(t.assigned_to,'claim',t.type);
+        }
+      }
+      // tasks that left active set
+      for(const id of Object.keys(prevStatus)){
+        if(prevStatus[id]!=='pending'&&!(id in cur)){
+          jget('/tasks/'+id).then(t=>{
+            const d=deskOf[t.assigned_to||'']||{x:W/2,y:H/2};
+            const src=(t.assigned_to||'').startsWith('proxy:')?{x:RACK.x+60,y:RACK.y+40}:{x:d.x+58,y:d.y+4};
+            if(t.status==='done'){doneToday++;fly(src.x,src.y,OUTTRAY.x+20,OUTTRAY.y+30,'card',t.type,'#3ecf8e');tick0(t.assigned_to,'done',t.type);}
+            else if(t.status==='failed'){fly(src.x,src.y,DLQBIN.x+30,DLQBIN.y+40,'redcard',t.type);tick0(t.assigned_to,'fail',t.type);}
+            else if(t.status==='pending'){fly(src.x,src.y,INBOX.x+20,INBOX.y+40,'redcard',t.type);tick0(t.assigned_to,'retry',t.type);}
+          }).catch(()=>{});
+        }
+      }
+    }
+    prevStatus=cur; firstPoll=false;
+    connOK=true; updateHeader();
+  }catch(e){connOK=false;updateHeader();}
+}
+
+async function pollFeed(){
+  try{
+    const evs=await jget('/feed?since_id='+feedSince+'&limit=40');
+    for(const ev of evs){
+      feedSince=Math.max(feedSince,ev.id);
+      if(ev.event_type==='a2a_send'){
+        const from=deskOf[ev.source], tos=ev.target?[ev.target]:agents.map(a=>a.id).filter(i=>i!==ev.source);
+        for(const to of tos){const td=deskOf[to];
+          if(from&&td) fly(from.x+50,from.y-30,td.x+50,td.y-30,'env','', '',1100);}
+        bubbles[ev.source]={text:(ev.details&&ev.details.message_type)||'msg',until:Date.now()+2600,color:'rgba(6,182,212,.92)'};
+        tickAdd('t-a2a',ev.source,'→ '+(ev.target||'ALL')+' ['+((ev.details&&ev.details.message_type)||'msg')+']');
+      }
+      if(ev.event_type==='tool_call') toolGlow[ev.source]=Date.now()+9000;
+      if(ev.event_type==='agent_online') bubbles[ev.source]={text:'online!',until:Date.now()+2200,color:'rgba(62,207,142,.92)'};
+      if(ev.event_type==='agent_offline') bubbles[ev.source]={text:'bye…',until:Date.now()+2200,color:'rgba(148,163,184,.92)'};
+    }
+  }catch(e){}
+}
+
+function tick0(agent,kind,type){
+  const m={claim:['t-claim','claims'],done:['t-done','finished'],fail:['t-fail','dead-letters'],retry:['t-fail','bounces']}[kind];
+  tickAdd(m[0],agent||'?',m[1]+' '+(type||''));
+  if(agent&&!agent.startsWith('proxy:'))
+    bubbles[agent]={text:{claim:'on it!',done:'done ✓',fail:'ugh…',retry:'retry…'}[kind],
+      until:Date.now()+2400,color:{claim:'rgba(91,138,245,.92)',done:'rgba(62,207,142,.92)',fail:'rgba(255,92,92,.92)',retry:'rgba(245,166,35,.92)'}[kind]};
+}
+const tickerEl=document.getElementById('ticker'); const tickerItems=[];
+function tickAdd(cls,who,what){
+  tickerItems.unshift(`<span class="tk ${cls}"><b>${who}</b> ${what}</span>`);
+  if(tickerItems.length>12)tickerItems.pop();
+  tickerEl.innerHTML=tickerItems.join('');
+}
+function updateHeader(){
+  document.getElementById('st-pend').textContent=(tasks.pending||[]).length;
+  document.getElementById('st-run').textContent=(tasks.active||[]).length;
+  document.getElementById('st-done').textContent=doneToday;
+  document.getElementById('st-dlq').textContent=dlqCount;
+  document.getElementById('st-agents').textContent=agents.filter(a=>a.online).length+'/'+agents.length;
+  const c=document.getElementById('conn');
+  c.textContent=connOK?'LIVE':'OFFLINE'; c.className=connOK?'':'off';
+}
+
+// ── Render loop ─────────────────────────────────────────────────────
+function render(){
+  tick++;
+  ctx.clearRect(0,0,W,H);
+  drawRoom();
+  const pend=tasks.pending||[], active=tasks.active||[];
+  drawInbox(pend); drawOutTray(); drawDLQ();
+  drawRack(active.filter(t=>(t.assigned_to||'').startsWith('proxy:')));
+
+  // desks: real agents (skip proxy pseudo-owners)
+  const realAgents=agents.filter(a=>!a.id.startsWith('proxy:'));
+  const slots=deskSlots(realAgents.length||3);
+  realAgents.forEach((a,i)=>{
+    deskOf[a.id]=slots[i];
+    const task=active.find(t=>t.assigned_to===a.id);
+    drawDesk(slots[i],a,task);
+  });
+  if(realAgents.length===0){
+    text('no agents registered yet — waiting for heartbeats…',W/2-160,H/2,'#475572',11);
+  }
+  drawFlights();
+  requestAnimationFrame(render);
+}
+
+poll(); pollFeed();
+setInterval(poll,2500); setInterval(pollFeed,2000);
+requestAnimationFrame(render);
+</script>
+</body>
+</html>

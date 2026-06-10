@@ -434,11 +434,26 @@ def _run_proxy_task(task: dict):
 
 # ── Dashboard ──────────────────────────────────────────────────────────
 
+import pathlib as _pathlib
+from fastapi.staticfiles import StaticFiles
+
+_STATIC_DIR = _pathlib.Path(__file__).parent.parent / "static"
+
+# The dashboard has always fetched /sprites/sprites.json for its PNG sheets,
+# but the static dir was never mounted — sprites silently 404'd and the page
+# fell back to inline pixel art forever.
+app.mount("/sprites", StaticFiles(directory=str(_STATIC_DIR / "sprites")), name="sprites")
+
+
 @app.get("/dashboard", response_class=HTMLResponse)
 def dashboard():
-    import pathlib
-    html_path = pathlib.Path(__file__).parent.parent / "static" / "dashboard.html"
-    return HTMLResponse(html_path.read_text(encoding="utf-8"))
+    return HTMLResponse((_STATIC_DIR / "dashboard.html").read_text(encoding="utf-8"))
+
+
+@app.get("/office", response_class=HTMLResponse)
+def office():
+    """Pixel-office view: animated agents at desks, live task flow."""
+    return HTMLResponse((_STATIC_DIR / "office.html").read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":
