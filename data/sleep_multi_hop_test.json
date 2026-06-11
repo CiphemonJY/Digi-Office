@@ -1,0 +1,194 @@
+[
+  {
+    "id": "mh_0041",
+    "source": {
+      "code": "395123002",
+      "system": "SNOMED-CT",
+      "display": "Urine screening test for diabetes"
+    },
+    "hop_1": {
+      "code": "268556000",
+      "system": "SNOMED-CT",
+      "display": "Urine screening for glucose",
+      "similarity": 0.8917976021766663
+    },
+    "hop_2": {
+      "code": "2339-0",
+      "system": "LOINC",
+      "display": "Glucose",
+      "similarity": 0.5995317697525024
+    },
+    "hop_3": {
+      "code": "1006907",
+      "system": "RXNORM",
+      "display": "ethanol / glucose",
+      "similarity": 0.7209804058074951
+    },
+    "hop_4": {
+      "code": "2339-0",
+      "system": "LOINC",
+      "display": "Glucose",
+      "similarity": 0.7209804058074951
+    }
+  },
+  {
+    "id": "mh_0064",
+    "source": {
+      "code": "386619000",
+      "system": "SNOMED-CT",
+      "display": "Low sodium diet (finding)"
+    },
+    "hop_1": {
+      "code": "226164007",
+      "system": "SNOMED-CT",
+      "display": "Very low sodium diet (finding)",
+      "similarity": 0.985745906829834
+    },
+    "hop_2": {
+      "code": "33718-8",
+      "system": "LOINC",
+      "display": "Sodium",
+      "similarity": 0.6431368589401245
+    },
+    "hop_3": {
+      "code": "386619000",
+      "system": "SNOMED-CT",
+      "display": "Low sodium diet (finding)",
+      "similarity": 0.6480698585510254
+    },
+    "hop_4": {
+      "code": "33718-8",
+      "system": "LOINC",
+      "display": "Sodium",
+      "similarity": 0.6480697989463806
+    }
+  },
+  {
+    "id": "mh_0093",
+    "source": {
+      "code": "76601001",
+      "system": "SNOMED-CT",
+      "display": "Intramuscular injection"
+    },
+    "hop_1": {
+      "code": "313191000",
+      "system": "SNOMED-CT",
+      "display": "Injection of epinephrine (procedure)",
+      "similarity": 0.5739966630935669
+    },
+    "hop_2": {
+      "code": "1006623",
+      "system": "RXNORM",
+      "display": "Eprinex",
+      "similarity": 0.595923662185669
+    },
+    "hop_3": {
+      "code": "313191000",
+      "system": "SNOMED-CT",
+      "display": "Injection of epinephrine (procedure)",
+      "similarity": 0.595923662185669
+    },
+    "hop_4": {
+      "code": "1006623",
+      "system": "RXNORM",
+      "display": "Eprinex",
+      "similarity": 0.595923662185669
+    }
+  },
+  {
+    "id": "mh_0094",
+    "source": {
+      "code": "226164007",
+      "system": "SNOMED-CT",
+      "display": "Very low sodium diet (finding)"
+    },
+    "hop_1": {
+      "code": "386619000",
+      "system": "SNOMED-CT",
+      "display": "Low sodium diet (finding)",
+      "similarity": 0.985745906829834
+    },
+    "hop_2": {
+      "code": "33718-8",
+      "system": "LOINC",
+      "display": "Sodium",
+      "similarity": 0.6480697989463806
+    },
+    "hop_3": {
+      "code": "386619000",
+      "system": "SNOMED-CT",
+      "display": "Low sodium diet (finding)",
+      "similarity": 0.6480698585510254
+    },
+    "hop_4": {
+      "code": "33718-8",
+      "system": "LOINC",
+      "display": "Sodium",
+      "similarity": 0.6480697989463806
+    }
+  },
+  {
+    "id": "mh_0112",
+    "source": {
+      "code": "431182000",
+      "system": "SNOMED-CT",
+      "display": "Placing subject in prone position (procedure)"
+    },
+    "hop_1": {
+      "code": "271605009",
+      "system": "SNOMED-CT",
+      "display": "Position of body and posture (observable entity)",
+      "similarity": 0.4862613081932068
+    },
+    "hop_2": {
+      "code": "8302-2",
+      "system": "LOINC",
+      "display": "Body height",
+      "similarity": 0.4024612009525299
+    },
+    "hop_3": {
+      "code": "274804006",
+      "system": "SNOMED-CT",
+      "display": "Evaluation of uterine fundal height",
+      "similarity": 0.4722958207130432
+    },
+    "hop_4": {
+      "code": "8302-2",
+      "system": "LOINC",
+      "display": "Body height",
+      "similarity": 0.4722958207130432
+    }
+  },
+  {
+    "id": "mh_0148",
+    "source": {
+      "code": "226164007",
+      "system": "SNOMED-CT",
+      "display": "Very low sodium diet (finding)"
+    },
+    "hop_1": {
+      "code": "386619000",
+      "system": "SNOMED-CT",
+      "display": "Low sodium diet (finding)",
+      "similarity": 0.985745906829834
+    },
+    "hop_2": {
+      "code": "33718-8",
+      "system": "LOINC",
+      "display": "Sodium",
+      "similarity": 0.6480697989463806
+    },
+    "hop_3": {
+      "code": "386619000",
+      "system": "SNOMED-CT",
+      "display": "Low sodium diet (finding)",
+      "similarity": 0.6480698585510254
+    },
+    "hop_4": {
+      "code": "33718-8",
+      "system": "LOINC",
+      "display": "Sodium",
+      "similarity": 0.6480697989463806
+    }
+  }
+]
