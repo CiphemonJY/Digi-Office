@@ -18,7 +18,8 @@ from .db import (
     log_tool_call, log_tool_result, list_dlq, get_dlq_entry,
     requeue_from_dlq, release_task, reclaim_stale_tasks,
     get_task_attempts, NotTaskOwner, reassign_task,
-    reclaim_orphaned_proxy_tasks,
+    reclaim_orphaned_proxy_tasks, cancel_task,
+    create_goal, list_goals, get_goal, set_goal_status, GOAL_STATUSES,
 )
 from .routing import resolve_route
 from .worker_proxy import proxy
@@ -74,6 +75,24 @@ class TaskSubmit(BaseModel):
     target_machine: Optional[str] = None
     project: str = "LISA_FTM"
     max_retries: Optional[int] = None
+    goal_id: Optional[str] = None
+    depends_on: list = []
+
+
+class GoalSubmit(BaseModel):
+    title: str
+    description: str = ""
+    acceptance: str = ""
+    created_by: str = ""
+
+
+class GoalStatusPayload(BaseModel):
+    status: str
+    notes: str = ""
+
+
+class CancelPayload(BaseModel):
+    reason: str = ""
 
 
 class HeartbeatPayload(BaseModel):
@@ -106,6 +125,13 @@ class A2AMessage(BaseModel):
     to_agent: Optional[str] = None
     message_type: str = "message"
     payload: dict = {}
+    task_id: Optional[str] = None
+
+
+class ActivityPayload(BaseModel):
+    kind: str = "tool"            # e.g. 'tool:Bash', 'session_start'
+    summary: str = ""             # one line, e.g. first 120 chars of a command
+    detail: Optional[str] = None
     task_id: Optional[str] = None
 
 
@@ -146,6 +172,8 @@ def health():
 
 @app.post("/tasks", status_code=201)
 def submit_task(body: TaskSubmit):
+    if body.depends_on and not all(isinstance(d, str) and d for d in body.depends_on):
+        raise HTTPException(422, "depends_on must be a list of task-id strings")
     route = resolve_route(body.type)
     caps = body.required_capabilities or route.get("required_capabilities", [])
     target = body.target_machine or (route.get("default") if route.get("proxy") else None)
@@ -153,6 +181,7 @@ def submit_task(body: TaskSubmit):
         type_=body.type, payload=body.payload, priority=body.priority,
         required_capabilities=caps, target_machine=target, project=body.project,
         max_retries=body.max_retries,
+        goal_id=body.goal_id, depends_on=body.depends_on,
     )
 
 
@@ -282,6 +311,18 @@ def fail_task_endpoint(task_id: str, body: FailPayload):
     return task
 
 
+@app.post("/tasks/{task_id}/cancel")
+def cancel_task_endpoint(task_id: str, body: Optional[CancelPayload] = None):
+    """Terminal cancel (planner use): no retry, no DLQ. 409 unless the task
+    is pending/claimed/running."""
+    if not get_task(task_id):
+        raise HTTPException(404, "Task not found")
+    task = cancel_task(task_id, reason=body.reason if body else "")
+    if not task:
+        raise HTTPException(409, "Task is not in a cancellable state")
+    return task
+
+
 @app.post("/tasks/{task_id}/release")
 def release_task_endpoint(task_id: str):
     """
@@ -322,6 +363,68 @@ def agent_heartbeat(agent_id: str, body: HeartbeatPayload):
 def list_agents():
     mark_stale_agents_offline(threshold_seconds=90)
     return get_agents()
+
+
+# ── Goals (the planner's unit of intent) ───────────────────────────────
+
+@app.post("/goals", status_code=201)
+def submit_goal(body: GoalSubmit):
+    return create_goal(title=body.title, description=body.description,
+                       acceptance=body.acceptance, created_by=body.created_by)
+
+
+@app.get("/goals")
+def goals_list(status: Optional[str] = Query(None)):
+    return list_goals(status=status)
+
+
+@app.get("/goals/{goal_id}")
+def goal_detail(goal_id: str):
+    goal = get_goal(goal_id)
+    if not goal:
+        raise HTTPException(404, "Goal not found")
+    return goal
+
+
+@app.post("/goals/{goal_id}/status")
+def goal_status(goal_id: str, body: GoalStatusPayload):
+    if body.status not in GOAL_STATUSES:
+        raise HTTPException(422, f"status must be one of {GOAL_STATUSES}")
+    goal = set_goal_status(goal_id, body.status, notes=body.notes)
+    if not goal:
+        raise HTTPException(404, "Goal not found")
+    return goal
+
+
+# ── Agent activity (auto-reported by Claude Code hooks) ────────────────
+# Visibility safety-net: agents' harness hooks post every tool call here, so
+# the office shows real activity even when an agent works without claiming a
+# task ("dark work"). Activity doubles as liveness — a busy agent never goes
+# stale even if its heartbeat thread wedges.
+
+_activity_window: dict = {}        # agent_id → [window_start_epoch, count]
+_ACTIVITY_CAP = 120                # max stored events per agent per 60s
+
+
+@app.post("/agents/{agent_id}/activity")
+def agent_activity(agent_id: str, body: ActivityPayload):
+    import time as _time
+    upsert_agent_heartbeat(agent_id=agent_id)      # liveness bump + auto-register
+    now = _time.monotonic()
+    win = _activity_window.get(agent_id)
+    if not win or now - win[0] > 60:
+        _activity_window[agent_id] = win = [now, 0]
+    win[1] += 1
+    if win[1] > _ACTIVITY_CAP:
+        # Collapse floods: keep 1-in-100 as a marker so the feed shows the
+        # burst without drowning in it.
+        if win[1] % 100 != 0:
+            return {"ok": True, "suppressed": True}
+        body.summary = f"[{win[1]} events this minute] " + (body.summary or "")
+    emit("agent_activity", source=agent_id, task_id=body.task_id,
+         details={"kind": body.kind, "summary": (body.summary or "")[:200],
+                  "detail": (body.detail or "")[:500] or None})
+    return {"ok": True}
 
 
 # ── A2A ────────────────────────────────────────────────────────────────

@@ -118,6 +118,19 @@ def init_db():
         );
         CREATE INDEX IF NOT EXISTS idx_task_attempts_task ON task_attempts(task_id, attempt_number);
 
+        -- Goals: units of intent the planner decomposes into task pipelines
+        CREATE TABLE IF NOT EXISTS goals (
+            id TEXT PRIMARY KEY,
+            title TEXT NOT NULL,
+            description TEXT,
+            acceptance TEXT,
+            status TEXT CHECK(status IN ('active','done','blocked','failed'))
+                   DEFAULT 'active',
+            created_by TEXT,
+            notes TEXT DEFAULT '',
+            created_at TEXT, updated_at TEXT, completed_at TEXT
+        );
+
         -- Dead Letter Queue: tasks that exhausted all retries
         CREATE TABLE IF NOT EXISTS dead_letter (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -138,6 +151,14 @@ def init_db():
             target_machine TEXT
         );
     """)
+    # Additive migration for live databases (CREATE TABLE IF NOT EXISTS won't
+    # add columns to an existing tasks table).
+    for ddl in ("ALTER TABLE tasks ADD COLUMN goal_id TEXT",
+                "ALTER TABLE tasks ADD COLUMN depends_on TEXT DEFAULT '[]'"):
+        try:
+            conn.execute(ddl)
+        except sqlite3.OperationalError:
+            pass  # column already exists
     conn.commit()
     conn.close()
 
@@ -195,15 +216,18 @@ def log_event(conn: sqlite3.Connection, task_id: str, event: str,
 
 def create_task(type_: str, payload: dict, priority: int = 1,
                 required_capabilities: list = None, target_machine: str = None,
-                project: str = "LISA_FTM", max_retries: Optional[int] = None) -> dict:
+                project: str = "LISA_FTM", max_retries: Optional[int] = None,
+                goal_id: Optional[str] = None,
+                depends_on: Optional[list] = None) -> dict:
     task_id = str(uuid.uuid4())
     conn = get_conn()
     cols = ["id", "type", "project", "priority", "payload", "required_capabilities",
-            "status", "created_at", "target_machine"]
+            "status", "created_at", "target_machine", "goal_id", "depends_on"]
     vals = [task_id, type_, project, priority,
             json.dumps(payload),
             json.dumps(required_capabilities or []),
-            "pending", now_iso(), target_machine]
+            "pending", now_iso(), target_machine,
+            goal_id, json.dumps(depends_on or [])]
     if max_retries is not None:
         cols.append("max_retries")
         vals.append(max_retries)
@@ -262,7 +286,8 @@ def claim_task(agent_id: str, capabilities: list) -> Optional[dict]:
         conn.execute("BEGIN IMMEDIATE")
         # Fetch all pending tasks ordered by priority, then find first with matching caps
         rows = conn.execute("""
-            SELECT id, type, payload, required_capabilities, target_machine, retries
+            SELECT id, type, payload, required_capabilities, target_machine,
+                   retries, depends_on
             FROM tasks
             WHERE status = 'pending'
               AND (scheduled_at IS NULL OR scheduled_at <= datetime('now'))
@@ -273,6 +298,21 @@ def claim_task(agent_id: str, capabilities: list) -> Optional[dict]:
             required = json.loads(row["required_capabilities"])
             if required and not all(cap in capabilities for cap in required):
                 continue  # Skip — agent doesn't have the required capabilities
+
+            # Dependency gating: claimable only when every dependency is done.
+            # Unknown/missing dependency ids count as unmet (defensive).
+            try:
+                deps = json.loads(row["depends_on"] or "[]")
+            except (TypeError, ValueError):
+                deps = []
+            if deps:
+                ph = ",".join("?" * len(deps))
+                done = conn.execute(
+                    f"SELECT COUNT(*) AS n FROM tasks WHERE id IN ({ph}) AND status='done'",
+                    deps,
+                ).fetchone()["n"]
+                if done < len(deps):
+                    continue  # Skip — pipeline stage not reached yet
 
             conn.execute(
                 """UPDATE tasks SET status='claimed', assigned_to=?, claimed_at=?
@@ -785,6 +825,145 @@ def reclaim_orphaned_proxy_tasks() -> int:
     for row in rows:
         fail_task(row["id"], "coordinator restarted during proxy execution")
     return len(rows)
+
+
+def cancel_task(task_id: str, reason: str = "") -> Optional[dict]:
+    """
+    Terminal cancel for obsolete tasks (planner use: a pipeline was
+    superseded). Unlike fail_task this never retries and never dead-letters.
+    Only valid from pending/claimed/running; returns None otherwise.
+    """
+    conn = get_conn()
+    try:
+        row = conn.execute(
+            "SELECT id FROM tasks WHERE id=? AND status IN ('pending','claimed','running')",
+            (task_id,),
+        ).fetchone()
+        if not row:
+            return None
+        conn.execute(
+            """UPDATE tasks SET status='failed', error=?, completed_at=?,
+               assigned_to=NULL WHERE id=?""",
+            (f"cancelled: {reason}"[:500], now_iso(), task_id),
+        )
+        conn.execute("UPDATE agents SET current_task_id=NULL WHERE current_task_id=?", (task_id,))
+        att = conn.execute(
+            "SELECT id FROM task_attempts WHERE task_id=? AND status='started' ORDER BY attempt_number DESC LIMIT 1",
+            (task_id,),
+        ).fetchone()
+        if att:
+            conn.execute(
+                "UPDATE task_attempts SET ended_at=?, status='failed', error=? WHERE id=?",
+                (now_iso(), f"cancelled: {reason}"[:500], att["id"]),
+            )
+        log_event(conn, task_id, "cancelled", details=reason)
+        conn.commit()
+    finally:
+        conn.close()
+    emit("task_cancelled", task_id=task_id, details={"reason": reason})
+    return get_task(task_id)
+
+
+# ── Goals ───────────────────────────────────────────────────────────────
+
+GOAL_STATUSES = ("active", "done", "blocked", "failed")
+
+
+def create_goal(title: str, description: str = "", acceptance: str = "",
+                created_by: str = "") -> dict:
+    goal_id = str(uuid.uuid4())
+    ts = now_iso()
+    conn = get_conn()
+    conn.execute(
+        """INSERT INTO goals (id, title, description, acceptance, status,
+           created_by, notes, created_at, updated_at)
+           VALUES (?,?,?,?, 'active', ?, '', ?, ?)""",
+        (goal_id, title, description, acceptance, created_by, ts, ts),
+    )
+    conn.commit()
+    conn.close()
+    emit("goal_created", source=created_by,
+         details={"goal_id": goal_id, "title": title})
+    return get_goal(goal_id)
+
+
+def list_goals(status: Optional[str] = None) -> list:
+    conn = get_conn()
+    if status:
+        rows = conn.execute(
+            "SELECT * FROM goals WHERE status=? ORDER BY created_at DESC", (status,)
+        ).fetchall()
+    else:
+        rows = conn.execute("SELECT * FROM goals ORDER BY created_at DESC").fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def get_goal(goal_id: str) -> Optional[dict]:
+    """Goal + rollup: task counts by status, finished tasks' parsed results,
+    and any DLQ entries belonging to this goal's tasks."""
+    conn = get_conn()
+    row = conn.execute("SELECT * FROM goals WHERE id=?", (goal_id,)).fetchone()
+    if not row:
+        conn.close()
+        return None
+    goal = dict(row)
+    tasks = conn.execute(
+        "SELECT * FROM tasks WHERE goal_id=? ORDER BY created_at ASC", (goal_id,)
+    ).fetchall()
+    task_ids = [t["id"] for t in tasks]
+    dlq = []
+    if task_ids:
+        ph = ",".join("?" * len(task_ids))
+        dlq = [dict(d) for d in conn.execute(
+            f"SELECT original_task_id, error, retries FROM dead_letter WHERE original_task_id IN ({ph})",
+            task_ids,
+        ).fetchall()]
+    conn.close()
+
+    counts = {}
+    finished = []
+    for t in tasks:
+        t = dict(t)
+        counts[t["status"]] = counts.get(t["status"], 0) + 1
+        if t["status"] in ("done", "failed"):
+            try:
+                result = json.loads(t["result_artifact"]) if t["result_artifact"] else None
+            except (TypeError, ValueError):
+                result = t["result_artifact"]
+            finished.append({"id": t["id"], "type": t["type"], "status": t["status"],
+                             "error": t["error"], "result": result})
+    goal["rollup"] = {"total": len(tasks), "by_status": counts,
+                      "finished": finished, "dlq": dlq}
+    return goal
+
+
+def set_goal_status(goal_id: str, status: str, notes: str = "") -> Optional[dict]:
+    """Update status and APPEND timestamped notes — the planner's decision log
+    must be reconstructable, so notes are never overwritten."""
+    if status not in GOAL_STATUSES:
+        raise ValueError(f"invalid goal status {status!r}")
+    conn = get_conn()
+    row = conn.execute("SELECT status, notes FROM goals WHERE id=?", (goal_id,)).fetchone()
+    if not row:
+        conn.close()
+        return None
+    old = row["status"]
+    ts = now_iso()
+    new_notes = (row["notes"] or "")
+    if notes:
+        new_notes += f"\n[{ts}] ({old}→{status}) {notes}"
+    completed = ts if status in ("done", "failed") else None
+    conn.execute(
+        """UPDATE goals SET status=?, notes=?, updated_at=?,
+           completed_at=COALESCE(?, completed_at) WHERE id=?""",
+        (status, new_notes, ts, completed, goal_id),
+    )
+    conn.commit()
+    conn.close()
+    emit("goal_status", details={"goal_id": goal_id, "from": old, "to": status,
+                                 "notes": notes[:300]})
+    return get_goal(goal_id)
 
 
 # ── Task attempt history helpers ────────────────────────────────────────

@@ -319,6 +319,167 @@ def test_proxy_claim_reassigns_to_proxy_owner(monkeypatch):
     assert t["result"] == {"proxied": True}
 
 
+# ── Goal layer: dependencies, cancel, rollups ───────────────────────────────
+
+def _mk_goal(**kw):
+    body = {"title": "test goal", "description": "d", "acceptance": "a",
+            "created_by": "james", **kw}
+    r = client.post("/goals", json=body)
+    assert r.status_code == 201
+    return r.json()
+
+
+def test_dependency_gating_orders_pipeline():
+    cap = f"cap_{uuid.uuid4().hex[:6]}"
+    g = _mk_goal()
+    a = submit(cap, goal_id=g["id"])
+    rb = client.post("/tasks", json={"type": "stage_b", "payload": {},
+                                     "required_capabilities": [cap],
+                                     "goal_id": g["id"], "depends_on": [a["id"]]})
+    b = rb.json()
+    rc = client.post("/tasks", json={"type": "stage_c", "payload": {},
+                                     "required_capabilities": [cap],
+                                     "goal_id": g["id"], "depends_on": [b["id"]]})
+    c = rc.json()
+
+    # Only A is claimable: B and C are dependency-blocked.
+    first = claim("pipe_agent", cap)
+    assert first["id"] == a["id"]
+    r = client.get("/tasks/claim", params={"agent_id": "pipe_agent",
+                                           "capabilities": json.dumps([cap])})
+    assert r.status_code == 204, "B must not be claimable while A is running"
+
+    # A completes → B unblocks; C still blocked.
+    client.post(f"/tasks/{a['id']}/complete",
+                json={"result_payload": {"ok": 1}, "agent_id": "pipe_agent"})
+    second = claim("pipe_agent", cap)
+    assert second["id"] == b["id"]
+    r = client.get("/tasks/claim", params={"agent_id": "pipe_agent",
+                                           "capabilities": json.dumps([cap])})
+    assert r.status_code == 204
+
+    client.post(f"/tasks/{b['id']}/complete",
+                json={"result_payload": {"ok": 2}, "agent_id": "pipe_agent"})
+    third = claim("pipe_agent", cap)
+    assert third["id"] == c["id"]
+
+
+def test_dead_lettered_parent_keeps_child_blocked():
+    cap = f"cap_{uuid.uuid4().hex[:6]}"
+    parent = submit(cap, max_retries=1)
+    client.post("/tasks", json={"type": "child", "payload": {},
+                                "required_capabilities": [cap],
+                                "depends_on": [parent["id"]]})
+    claim("dlq_pipe_agent", cap)
+    client.post(f"/tasks/{parent['id']}/fail", json={"error": "boom"})
+    assert db.get_dlq_entry(parent["id"]) is not None
+    r = client.get("/tasks/claim", params={"agent_id": "dlq_pipe_agent",
+                                           "capabilities": json.dumps([cap])})
+    assert r.status_code == 204, "child of a dead-lettered parent must stay blocked"
+
+
+def test_unknown_dependency_blocks():
+    cap = f"cap_{uuid.uuid4().hex[:6]}"
+    client.post("/tasks", json={"type": "orphan_dep", "payload": {},
+                                "required_capabilities": [cap],
+                                "depends_on": ["no-such-task-id"]})
+    r = client.get("/tasks/claim", params={"agent_id": "x",
+                                           "capabilities": json.dumps([cap])})
+    assert r.status_code == 204
+
+
+def test_cancel_is_terminal_and_skips_dlq():
+    cap = f"cap_{uuid.uuid4().hex[:6]}"
+    t = submit(cap)
+    r = client.post(f"/tasks/{t['id']}/cancel", json={"reason": "superseded"})
+    assert r.status_code == 200
+    got = db.get_task(t["id"])
+    assert got["status"] == "failed" and got["error"].startswith("cancelled:")
+    assert db.get_dlq_entry(t["id"]) is None, "cancel must not dead-letter"
+    # cancelling a finished task → 409
+    r = client.post(f"/tasks/{t['id']}/cancel", json={"reason": "again"})
+    assert r.status_code == 409
+
+
+def test_goal_rollup_and_notes_append():
+    cap = f"cap_{uuid.uuid4().hex[:6]}"
+    g = _mk_goal(title="rollup goal")
+    t1 = submit(cap, goal_id=g["id"])
+    submit(cap, goal_id=g["id"])
+    claim("rollup_agent", cap)
+    client.post(f"/tasks/{t1['id']}/complete",
+                json={"result_payload": {"ppl": 18.5}, "agent_id": "rollup_agent"})
+
+    detail = client.get(f"/goals/{g['id']}").json()
+    ru = detail["rollup"]
+    assert ru["total"] == 2 and ru["by_status"]["done"] == 1
+    assert ru["finished"][0]["result"] == {"ppl": 18.5}
+
+    client.post(f"/goals/{g['id']}/status", json={"status": "blocked", "notes": "first note"})
+    client.post(f"/goals/{g['id']}/status", json={"status": "active", "notes": "second note"})
+    notes = client.get(f"/goals/{g['id']}").json()["notes"]
+    assert "first note" in notes and "second note" in notes, "notes must append, not replace"
+
+
+def test_goal_status_validation_and_token():
+    g = _mk_goal()
+    r = client.post(f"/goals/{g['id']}/status", json={"status": "bogus"})
+    assert r.status_code == 422
+    os.environ["DIGI_OFFICE_TOKEN"] = "s3cret"
+    try:
+        r = client.post("/goals", json={"title": "x"})
+        assert r.status_code == 401
+    finally:
+        del os.environ["DIGI_OFFICE_TOKEN"]
+
+
+def test_legacy_task_without_goal_fields_unchanged():
+    cap = f"cap_{uuid.uuid4().hex[:6]}"
+    t = submit(cap)                      # no goal_id / depends_on in body
+    claimed = claim("legacy_agent2", cap)
+    assert claimed["id"] == t["id"]
+    r = client.post(f"/tasks/{t['id']}/complete", json={"result_payload": {"v": 1}})
+    assert r.json()["status"] == "done"
+
+
+# ── Agent activity endpoint (auto-reporting hooks) ─────────────────────────
+
+def test_activity_lands_in_feed_and_bumps_liveness():
+    aid = f"hookagent_{uuid.uuid4().hex[:6]}"
+    r = client.post(f"/agents/{aid}/activity",
+                    json={"kind": "tool:Bash", "summary": "pytest -q"})
+    assert r.status_code == 200
+    # unknown agent auto-registered + alive
+    agent = next(a for a in db.get_agents() if a["id"] == aid)
+    assert agent["online"] == 1
+    # event visible in the feed
+    evs = client.get("/feed?since_id=0&limit=500").json()
+    mine = [e for e in evs if e["event_type"] == "agent_activity" and e["source"] == aid]
+    assert mine and mine[-1]["details"]["summary"] == "pytest -q"
+
+
+def test_activity_flood_is_collapsed():
+    aid = f"floodagent_{uuid.uuid4().hex[:6]}"
+    for i in range(180):
+        client.post(f"/agents/{aid}/activity", json={"kind": "tool:Bash", "summary": f"cmd {i}"})
+    evs = client.get("/feed?since_id=0&limit=2000").json()
+    mine = [e for e in evs if e["event_type"] == "agent_activity" and e["source"] == aid]
+    # 120 stored + 1-in-100 markers beyond the cap, not 180
+    assert len(mine) < 130, f"flood not collapsed: {len(mine)} events stored"
+
+
+def test_activity_requires_token_when_set():
+    os.environ["DIGI_OFFICE_TOKEN"] = "s3cret"
+    try:
+        r = client.post("/agents/x/activity", json={"kind": "t", "summary": "s"})
+        assert r.status_code == 401
+        r = client.post("/agents/x/activity", json={"kind": "t", "summary": "s"},
+                        headers={"Authorization": "Bearer s3cret"})
+        assert r.status_code == 200
+    finally:
+        del os.environ["DIGI_OFFICE_TOKEN"]
+
+
 # ── Pixel office view + static sprite mount ────────────────────────────────
 
 def test_office_page_served():
