@@ -1,0 +1,12 @@
+{
+  "alpha": 2.339162500000001,
+  "baseline": 0.46979476559499744,
+  "trained_2pass": 0.7707556516534163,
+  "trained_4pass": 0.7682713448847588,
+  "improvement_2pass": 0.30096088605841886,
+  "improvement_4pass": 0.29847657928976135,
+  "improvement_pct_4pass": 63.53339823012699,
+  "n_tested": 96,
+  "optimizer": "COBYLA",
+  "method": "scalar-alpha-context"
+}

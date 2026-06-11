@@ -1,0 +1,10 @@
+{
+  "alpha": 0.26631093749999996,
+  "baseline": 0.480990804201186,
+  "trained": 0.48098541068797507,
+  "improvement": -5.393513210938394e-06,
+  "improvement_pct": -0.0011213339556243216,
+  "n_tested": 60,
+  "optimizer": "COBYLA",
+  "method": "scalar-alpha-tanh"
+}
