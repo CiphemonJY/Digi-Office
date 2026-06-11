@@ -42,6 +42,26 @@ python -m digi_office.coordinator.server
   `proxy:<machine>`, not the agent that polled them; runs orphaned by a coordinator
   restart are requeued at boot.
 
+## Goals & pipelines (autonomy substrate)
+
+- **Goals** (`POST /goals`, `GET /goals/{id}`) are units of intent with an
+  `acceptance` criterion. `GET /goals/{id}` returns a rollup: task counts by
+  status, finished tasks' parsed results, DLQ entries.
+- **Dependencies**: `POST /tasks` accepts `goal_id` and `depends_on`
+  (a list of task ids). A task is claimable only when every dependency is
+  `done` — pipelines execute strictly in order with no extra machinery.
+  A dead-lettered dependency keeps its children blocked: resolving that is
+  the planner's job, not an automatic cascade.
+- **Cancel** (`POST /tasks/{id}/cancel`): terminal, no retry, no DLQ — for
+  superseded pipeline stages.
+- **Status changes** (`POST /goals/{id}/status`) append timestamped notes
+  (never overwrite) so every decision is reconstructable.
+- **Contract**: only the planner agent decomposes goals and sets goal status
+  (see [docs/PLANNER_PROMPT.md](docs/PLANNER_PROMPT.md)); only James (or a
+  whitelisted principal) creates goals. Workers execute; the planner decides.
+- Active goals render as a noticeboard with progress bars on the `/office`
+  wall.
+
 ## Auto-reporting hooks (visibility safety-net)
 
 Agents are Claude Code sessions; models forget to report. The harness doesn't.

@@ -82,6 +82,7 @@ let flights = [];               // animated cards/envelopes
 let bubbles = {};               // agent_id → {text,until,color}
 let toolGlow = {};              // agent_id → until (tool aura)
 let offBook = {};               // agent_id → until (hook activity w/o a claimed task)
+let goals = [];                 // active goals (with rollups) for the wall board
 let connOK = true, tick = 0, firstPoll = true;
 let doneToday = 0;
 
@@ -182,6 +183,19 @@ function drawRoom() {
   rect(133,18,4,58,'#0f172a'); rect(64,45,142,4,'#0f172a');
   // sign
   text('DIGI-OFFICE',262,40,'#5b8af5',16,true); text('federated learning division',262,56,'#475572',9);
+  // goal noticeboard (active goals + pipeline progress)
+  if(goals.length){
+    rect(258,60,290,40,'#241c12'); rect(260,62,286,36,'#2e2418');
+    goals.slice(0,3).forEach((g,i)=>{
+      const gy=70+i*11, ru=g.rollup||{total:0,by_status:{}};
+      const done=(ru.by_status&&ru.by_status.done)||0, tot=ru.total||0;
+      rect(266,gy-6,4,4,'#f5a623');
+      text(g.title.slice(0,26),274,gy,'#d8c9a8',8,true);
+      rect(448,gy-6,72,6,'#1a140c');
+      if(tot>0) rect(448,gy-6,Math.round(72*done/tot),6,done===tot?'#3ecf8e':'#5b8af5');
+      text(done+'/'+tot,524,gy,'#8a7a5a',7);
+    });
+  }
   // clock
   const now=new Date();
   rect(560,24,66,28,'#0f172a'); rect(562,26,62,24,'#101626');
@@ -450,8 +464,15 @@ function render(){
   requestAnimationFrame(render);
 }
 
-poll(); pollFeed();
-setInterval(poll,2500); setInterval(pollFeed,2000);
+async function pollGoals(){
+  try{
+    const gs=await jget('/goals?status=active');
+    goals=await Promise.all(gs.slice(0,3).map(g=>jget('/goals/'+g.id).catch(()=>g)));
+  }catch(e){goals=[];}
+}
+
+poll(); pollFeed(); pollGoals();
+setInterval(poll,2500); setInterval(pollFeed,2000); setInterval(pollGoals,10000);
 requestAnimationFrame(render);
 </script>
 </body>
