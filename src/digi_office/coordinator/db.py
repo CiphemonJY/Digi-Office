@@ -697,7 +697,7 @@ def get_dlq_entry(original_task_id: str) -> Optional[dict]:
     return d
 
 
-def requeue_from_dlq(original_task_id: str, max_retries: int | None = None) -> dict:
+def requeue_from_dlq(original_task_id: str, max_retries: Optional[int] = None) -> dict:
     """
     Requeue a task from the DLQ. Creates a fresh pending task with a new UUID.
     Optionally overrides max_retries. Returns the new task dict.
