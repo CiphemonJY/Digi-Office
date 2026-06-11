@@ -78,6 +78,15 @@ ROUTING_TABLE = {
         "required_capabilities": [],
         "proxy": True,
     },
+    # ── Generic remote execution (payload.commands) ─────────────────
+    # Unlocks: payload.commands as shell strings, executed via SSH on DGX.
+    "remote_exec": {
+        "default": "dgx_primary",
+        "fallback": "dgx_secondary",
+        "required_capabilities": [],
+        "proxy": True,
+    },
+
 }
 
 

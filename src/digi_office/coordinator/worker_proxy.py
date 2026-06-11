@@ -23,14 +23,12 @@ MACHINES = {
     "dgx_primary": {
         "host": "100.72.65.100",
         "user": "syeung",
-        "ssh_binary": "tailscale ssh",
-        "ssh_opts": [],
+        "ssh_binary": "ssh",
     },
     "dgx_secondary": {
         "host": "100.99.1.84",
         "user": "syeung",
-        "ssh_binary": "tailscale ssh",
-        "ssh_opts": [],
+        "ssh_binary": "ssh",
     },
 }
 
@@ -141,7 +139,13 @@ class WorkerProxy:
 
         entry = TASK_SCRIPTS.get(task_type)
         if entry is None:
-            # fallback — generic digi_worker (placeholder for now)
+            # Fallback 1: payload.commands — direct shell chain (ciphemon pattern)
+            commands = payload.get("commands")
+            if commands and isinstance(commands, list):
+                cwd = payload.get("cwd", "~/LISA_FTM")
+                script = " && ".join(commands)
+                return f"cd {cwd} && {script}"
+            # Fallback 2: generic digi_worker (placeholder)
             return f"cd ~/LISA_FTM \u0026\u0026 python3 -m digi_worker run '{task_type}' '{payload_json}'"
 
         script_path, use_venv = entry

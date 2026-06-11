@@ -3,6 +3,7 @@ import logging
 import asyncio
 import os
 import secrets
+import time
 from contextlib import asynccontextmanager
 from typing import Optional
 
@@ -408,9 +409,8 @@ _ACTIVITY_CAP = 120                # max stored events per agent per 60s
 
 @app.post("/agents/{agent_id}/activity")
 def agent_activity(agent_id: str, body: ActivityPayload):
-    import time as _time
     upsert_agent_heartbeat(agent_id=agent_id)      # liveness bump + auto-register
-    now = _time.monotonic()
+    now = time.monotonic()
     win = _activity_window.get(agent_id)
     if not win or now - win[0] > 60:
         _activity_window[agent_id] = win = [now, 0]
@@ -425,6 +425,19 @@ def agent_activity(agent_id: str, body: ActivityPayload):
          details={"kind": body.kind, "summary": (body.summary or "")[:200],
                   "detail": (body.detail or "")[:500] or None})
     return {"ok": True}
+
+
+@app.get("/agents/{agent_id}/activity")
+def get_agent_activity(agent_id: str):
+    """Return recent feed events for this agent and its current activity window."""
+    events = get_feed(limit=80)
+    agent_events = [e for e in events if e.get("source") == agent_id]
+    win = _activity_window.get(agent_id)
+    return {
+        "agent_id": agent_id,
+        "window": {"start": win[0], "count": win[1]} if win else None,
+        "recent": agent_events[:20],
+    }
 
 
 # ── A2A ────────────────────────────────────────────────────────────────
@@ -546,6 +559,7 @@ _STATIC_DIR = _pathlib.Path(__file__).parent.parent / "static"
 # but the static dir was never mounted — sprites silently 404'd and the page
 # fell back to inline pixel art forever.
 app.mount("/sprites", StaticFiles(directory=str(_STATIC_DIR / "sprites")), name="sprites")
+app.mount("/docs", StaticFiles(directory=str(_STATIC_DIR / "docs")), name="docs")
 
 
 @app.get("/dashboard", response_class=HTMLResponse)
