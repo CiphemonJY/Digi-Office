@@ -1,22 +1,54 @@
 [
   {
-    "id": "mh_0041",
+    "id": "mh_0010",
     "source": {
-      "code": "395123002",
+      "code": "51116004",
       "system": "SNOMED-CT",
-      "display": "Urine screening test for diabetes"
+      "display": "Passive immunization (procedure)"
     },
     "hop_1": {
-      "code": "268556000",
+      "code": "33879002",
       "system": "SNOMED-CT",
-      "display": "Urine screening for glucose",
-      "similarity": 0.8917976021766663
+      "display": "Administration of vaccine to produce active immunity (procedure)",
+      "similarity": 0.7187374830245972
     },
     "hop_2": {
-      "code": "2339-0",
+      "code": "1006915",
+      "system": "RXNORM",
+      "display": "poliovirus vaccine inactivated, type 1 (Mahoney) / poliovirus vaccine inactivated, type 2 (MEF-1) / poliovirus vaccine inactivated, type 3 (Saukett)",
+      "similarity": 0.4441928565502167
+    },
+    "hop_3": {
+      "code": "33879002",
+      "system": "SNOMED-CT",
+      "display": "Administration of vaccine to produce active immunity (procedure)",
+      "similarity": 0.4441928565502167
+    },
+    "hop_4": {
+      "code": "1006915",
+      "system": "RXNORM",
+      "display": "poliovirus vaccine inactivated, type 1 (Mahoney) / poliovirus vaccine inactivated, type 2 (MEF-1) / poliovirus vaccine inactivated, type 3 (Saukett)",
+      "similarity": 0.4441928565502167
+    }
+  },
+  {
+    "id": "mh_0038",
+    "source": {
+      "code": "337388004",
+      "system": "SNOMED-CT",
+      "display": "Blood glucose testing strips (physical object)"
+    },
+    "hop_1": {
+      "code": "337414009",
+      "system": "SNOMED-CT",
+      "display": "Blood glucose meter (physical object)",
+      "similarity": 0.8271621465682983
+    },
+    "hop_2": {
+      "code": "33914-3",
       "system": "LOINC",
       "display": "Glucose",
-      "similarity": 0.5995317697525024
+      "similarity": 0.5872693657875061
     },
     "hop_3": {
       "code": "1006907",
@@ -32,163 +64,67 @@
     }
   },
   {
-    "id": "mh_0064",
+    "id": "mh_0054",
     "source": {
-      "code": "386619000",
+      "code": "84489001",
       "system": "SNOMED-CT",
-      "display": "Low sodium diet (finding)"
+      "display": "Mold (organism)"
     },
     "hop_1": {
-      "code": "226164007",
+      "code": "735029006",
       "system": "SNOMED-CT",
-      "display": "Very low sodium diet (finding)",
-      "similarity": 0.985745906829834
+      "display": "Shellfish (substance)",
+      "similarity": 0.4518996775150299
     },
     "hop_2": {
-      "code": "33718-8",
-      "system": "LOINC",
-      "display": "Sodium",
-      "similarity": 0.6431368589401245
-    },
-    "hop_3": {
-      "code": "386619000",
-      "system": "SNOMED-CT",
-      "display": "Low sodium diet (finding)",
-      "similarity": 0.6480698585510254
-    },
-    "hop_4": {
-      "code": "33718-8",
-      "system": "LOINC",
-      "display": "Sodium",
-      "similarity": 0.6480697989463806
-    }
-  },
-  {
-    "id": "mh_0093",
-    "source": {
-      "code": "76601001",
-      "system": "SNOMED-CT",
-      "display": "Intramuscular injection"
-    },
-    "hop_1": {
-      "code": "313191000",
-      "system": "SNOMED-CT",
-      "display": "Injection of epinephrine (procedure)",
-      "similarity": 0.5739966630935669
-    },
-    "hop_2": {
-      "code": "1006623",
+      "code": "1006906",
       "system": "RXNORM",
-      "display": "Eprinex",
-      "similarity": 0.595923662185669
+      "display": "sodium bicarbonate / sodium chloride / sodium phosphate, dibasic",
+      "similarity": 0.45693933963775635
     },
     "hop_3": {
-      "code": "313191000",
-      "system": "SNOMED-CT",
-      "display": "Injection of epinephrine (procedure)",
-      "similarity": 0.595923662185669
+      "code": "33718-8",
+      "system": "LOINC",
+      "display": "Sodium",
+      "similarity": 0.5606865882873535
     },
     "hop_4": {
-      "code": "1006623",
+      "code": "1001686",
       "system": "RXNORM",
-      "display": "Eprinex",
-      "similarity": 0.595923662185669
+      "display": "sodium sulfate 0.257 MEQ/ML",
+      "similarity": 0.6162613034248352
     }
   },
   {
-    "id": "mh_0094",
+    "id": "mh_0057",
     "source": {
-      "code": "226164007",
+      "code": "399014008",
       "system": "SNOMED-CT",
-      "display": "Very low sodium diet (finding)"
+      "display": "Administration of diphtheria, pertussis, and tetanus vaccine"
     },
     "hop_1": {
-      "code": "386619000",
+      "code": "384700001",
       "system": "SNOMED-CT",
-      "display": "Low sodium diet (finding)",
-      "similarity": 0.985745906829834
+      "display": "Injection of tetanus antitoxin",
+      "similarity": 0.559307336807251
     },
     "hop_2": {
-      "code": "33718-8",
-      "system": "LOINC",
-      "display": "Sodium",
-      "similarity": 0.6480697989463806
+      "code": "1000107",
+      "system": "RXNORM",
+      "display": "incobotulinumtoxinA 200 UNT Injection",
+      "similarity": 0.5406571626663208
     },
     "hop_3": {
-      "code": "386619000",
+      "code": "384700001",
       "system": "SNOMED-CT",
-      "display": "Low sodium diet (finding)",
-      "similarity": 0.6480698585510254
+      "display": "Injection of tetanus antitoxin",
+      "similarity": 0.5406571626663208
     },
     "hop_4": {
-      "code": "33718-8",
-      "system": "LOINC",
-      "display": "Sodium",
-      "similarity": 0.6480697989463806
-    }
-  },
-  {
-    "id": "mh_0112",
-    "source": {
-      "code": "431182000",
-      "system": "SNOMED-CT",
-      "display": "Placing subject in prone position (procedure)"
-    },
-    "hop_1": {
-      "code": "271605009",
-      "system": "SNOMED-CT",
-      "display": "Position of body and posture (observable entity)",
-      "similarity": 0.4862613081932068
-    },
-    "hop_2": {
-      "code": "8302-2",
-      "system": "LOINC",
-      "display": "Body height",
-      "similarity": 0.4024612009525299
-    },
-    "hop_3": {
-      "code": "274804006",
-      "system": "SNOMED-CT",
-      "display": "Evaluation of uterine fundal height",
-      "similarity": 0.4722958207130432
-    },
-    "hop_4": {
-      "code": "8302-2",
-      "system": "LOINC",
-      "display": "Body height",
-      "similarity": 0.4722958207130432
-    }
-  },
-  {
-    "id": "mh_0148",
-    "source": {
-      "code": "226164007",
-      "system": "SNOMED-CT",
-      "display": "Very low sodium diet (finding)"
-    },
-    "hop_1": {
-      "code": "386619000",
-      "system": "SNOMED-CT",
-      "display": "Low sodium diet (finding)",
-      "similarity": 0.985745906829834
-    },
-    "hop_2": {
-      "code": "33718-8",
-      "system": "LOINC",
-      "display": "Sodium",
-      "similarity": 0.6480697989463806
-    },
-    "hop_3": {
-      "code": "386619000",
-      "system": "SNOMED-CT",
-      "display": "Low sodium diet (finding)",
-      "similarity": 0.6480698585510254
-    },
-    "hop_4": {
-      "code": "33718-8",
-      "system": "LOINC",
-      "display": "Sodium",
-      "similarity": 0.6480697989463806
+      "code": "1000107",
+      "system": "RXNORM",
+      "display": "incobotulinumtoxinA 200 UNT Injection",
+      "similarity": 0.5406571626663208
     }
   }
 ]
