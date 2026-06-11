@@ -42,6 +42,32 @@ python -m digi_office.coordinator.server
   `proxy:<machine>`, not the agent that polled them; runs orphaned by a coordinator
   restart are requeued at boot.
 
+## Auto-reporting hooks (visibility safety-net)
+
+Agents are Claude Code sessions; models forget to report. The harness doesn't.
+Install `scripts/claude_hooks/digi_report.py` as a hook on every agent host and
+all tool activity is posted to `POST /agents/{id}/activity` automatically,
+feeding the dashboard/office (untracked work renders with an amber `⚠ off-book`
+flag) and doubling as liveness.
+
+Merge into the agent's Claude Code `settings.json`:
+
+```json
+"hooks": {
+  "PostToolUse":  [ { "hooks": [ { "type": "command", "command": "python /path/to/digi_report.py" } ] } ],
+  "SessionStart": [ { "hooks": [ { "type": "command", "command": "python /path/to/digi_report.py" } ] } ],
+  "Stop":         [ { "hooks": [ { "type": "command", "command": "python /path/to/digi_report.py" } ] } ]
+}
+```
+
+Env per host: `DIGI_OFFICE_URL`, `DIGI_AGENT_ID`, optional `DIGI_OFFICE_TOKEN`
+and `DIGI_TASK_ID`. The hook is fire-and-forget (2s timeout, always exits 0) —
+a dead coordinator never breaks an agent's tool calls. The coordinator collapses
+floods (>120 events/agent/min stored as 1-in-100 markers).
+
+The fleet's coordination contract (coordinator-first, dark-work rules) is
+canonical in [docs/COORDINATION_PROTOCOL.md](docs/COORDINATION_PROTOCOL.md).
+
 ## Tests
 
 ```bash

@@ -81,6 +81,7 @@ let prevStatus = {};            // task_id → status (for transitions)
 let flights = [];               // animated cards/envelopes
 let bubbles = {};               // agent_id → {text,until,color}
 let toolGlow = {};              // agent_id → until (tool aura)
+let offBook = {};               // agent_id → until (hook activity w/o a claimed task)
 let connOK = true, tick = 0, firstPoll = true;
 let doneToday = 0;
 
@@ -260,7 +261,11 @@ function drawDesk(slot, agent, task) {
   const {x,y}=slot;
   const online = !!agent.online;
   const working = !!task;
-  const state = !online ? 'sleep' : working ? (toolGlow[agent.id]&&Date.now()<toolGlow[agent.id]?'tool':'work') : 'idle';
+  // Hook-reported activity with no claimed task = "dark work": render them
+  // busy but visibly flagged — the gap between activity and tasks is the point.
+  const darkWork = !working && online && offBook[agent.id] && Date.now()<offBook[agent.id];
+  const state = !online ? 'sleep'
+    : (working||darkWork) ? (toolGlow[agent.id]&&Date.now()<toolGlow[agent.id]?'tool':'work') : 'idle';
 
   // chair + agent behind desk
   rect(x+38,y+6,48,10,'#232839');
@@ -290,6 +295,9 @@ function drawDesk(slot, agent, task) {
   rect(x+20,y+38,5,5, online?'#3ecf8e':'#475569');
   // status line under nameplate
   if(working) text(runtimeOf(task),x+24,y+58,'#f5a623',8);
+  else if(darkWork){
+    if(tick%50<35) text('⚠ off-book',x+24,y+58,'#f5a623',8,true);
+  }
   else if(!online) text('offline',x+24,y+58,'#64748b',8);
   // speech bubble (A2A)
   const b=bubbles[agent.id];
@@ -388,6 +396,7 @@ async function pollFeed(){
         tickAdd('t-a2a',ev.source,'→ '+(ev.target||'ALL')+' ['+((ev.details&&ev.details.message_type)||'msg')+']');
       }
       if(ev.event_type==='tool_call') toolGlow[ev.source]=Date.now()+9000;
+      if(ev.event_type==='agent_activity') offBook[ev.source]=Date.now()+60000;
       if(ev.event_type==='agent_online') bubbles[ev.source]={text:'online!',until:Date.now()+2200,color:'rgba(62,207,142,.92)'};
       if(ev.event_type==='agent_offline') bubbles[ev.source]={text:'bye…',until:Date.now()+2200,color:'rgba(148,163,184,.92)'};
     }
