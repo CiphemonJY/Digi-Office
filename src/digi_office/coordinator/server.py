@@ -109,6 +109,13 @@ class A2AMessage(BaseModel):
     task_id: Optional[str] = None
 
 
+class ActivityPayload(BaseModel):
+    kind: str = "tool"            # e.g. 'tool:Bash', 'session_start'
+    summary: str = ""             # one line, e.g. first 120 chars of a command
+    detail: Optional[str] = None
+    task_id: Optional[str] = None
+
+
 class AckMessage(BaseModel):
     agent_id: Optional[str] = None
 
@@ -322,6 +329,37 @@ def agent_heartbeat(agent_id: str, body: HeartbeatPayload):
 def list_agents():
     mark_stale_agents_offline(threshold_seconds=90)
     return get_agents()
+
+
+# ── Agent activity (auto-reported by Claude Code hooks) ────────────────
+# Visibility safety-net: agents' harness hooks post every tool call here, so
+# the office shows real activity even when an agent works without claiming a
+# task ("dark work"). Activity doubles as liveness — a busy agent never goes
+# stale even if its heartbeat thread wedges.
+
+_activity_window: dict = {}        # agent_id → [window_start_epoch, count]
+_ACTIVITY_CAP = 120                # max stored events per agent per 60s
+
+
+@app.post("/agents/{agent_id}/activity")
+def agent_activity(agent_id: str, body: ActivityPayload):
+    import time as _time
+    upsert_agent_heartbeat(agent_id=agent_id)      # liveness bump + auto-register
+    now = _time.monotonic()
+    win = _activity_window.get(agent_id)
+    if not win or now - win[0] > 60:
+        _activity_window[agent_id] = win = [now, 0]
+    win[1] += 1
+    if win[1] > _ACTIVITY_CAP:
+        # Collapse floods: keep 1-in-100 as a marker so the feed shows the
+        # burst without drowning in it.
+        if win[1] % 100 != 0:
+            return {"ok": True, "suppressed": True}
+        body.summary = f"[{win[1]} events this minute] " + (body.summary or "")
+    emit("agent_activity", source=agent_id, task_id=body.task_id,
+         details={"kind": body.kind, "summary": (body.summary or "")[:200],
+                  "detail": (body.detail or "")[:500] or None})
+    return {"ok": True}
 
 
 # ── A2A ────────────────────────────────────────────────────────────────

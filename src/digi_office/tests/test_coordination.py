@@ -319,6 +319,44 @@ def test_proxy_claim_reassigns_to_proxy_owner(monkeypatch):
     assert t["result"] == {"proxied": True}
 
 
+# ── Agent activity endpoint (auto-reporting hooks) ─────────────────────────
+
+def test_activity_lands_in_feed_and_bumps_liveness():
+    aid = f"hookagent_{uuid.uuid4().hex[:6]}"
+    r = client.post(f"/agents/{aid}/activity",
+                    json={"kind": "tool:Bash", "summary": "pytest -q"})
+    assert r.status_code == 200
+    # unknown agent auto-registered + alive
+    agent = next(a for a in db.get_agents() if a["id"] == aid)
+    assert agent["online"] == 1
+    # event visible in the feed
+    evs = client.get("/feed?since_id=0&limit=500").json()
+    mine = [e for e in evs if e["event_type"] == "agent_activity" and e["source"] == aid]
+    assert mine and mine[-1]["details"]["summary"] == "pytest -q"
+
+
+def test_activity_flood_is_collapsed():
+    aid = f"floodagent_{uuid.uuid4().hex[:6]}"
+    for i in range(180):
+        client.post(f"/agents/{aid}/activity", json={"kind": "tool:Bash", "summary": f"cmd {i}"})
+    evs = client.get("/feed?since_id=0&limit=2000").json()
+    mine = [e for e in evs if e["event_type"] == "agent_activity" and e["source"] == aid]
+    # 120 stored + 1-in-100 markers beyond the cap, not 180
+    assert len(mine) < 130, f"flood not collapsed: {len(mine)} events stored"
+
+
+def test_activity_requires_token_when_set():
+    os.environ["DIGI_OFFICE_TOKEN"] = "s3cret"
+    try:
+        r = client.post("/agents/x/activity", json={"kind": "t", "summary": "s"})
+        assert r.status_code == 401
+        r = client.post("/agents/x/activity", json={"kind": "t", "summary": "s"},
+                        headers={"Authorization": "Bearer s3cret"})
+        assert r.status_code == 200
+    finally:
+        del os.environ["DIGI_OFFICE_TOKEN"]
+
+
 # ── Pixel office view + static sprite mount ────────────────────────────────
 
 def test_office_page_served():
