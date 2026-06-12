@@ -9,6 +9,7 @@ from typing import Optional
 
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
+from starlette.responses import RedirectResponse
 from pydantic import BaseModel
 
 from .db import (
@@ -529,22 +530,22 @@ def _run_proxy_task(task: dict):
     log_event(conn, task_id, "proxy_started", details=f"machine={machine}")
     conn.commit()
     conn.close()
-    emit("proxy_start", source="hermes", target=machine, task_id=task_id)
+    emit("proxy_start", source="hermesmon", target=machine, task_id=task_id)
 
     try:
         success, result = proxy.run_task(machine, task["type"], payload)
         if success:
             complete_task(task_id, result_payload=result)
-            emit("proxy_complete", source="hermes", target=machine, task_id=task_id,
+            emit("proxy_complete", source="hermesmon", target=machine, task_id=task_id,
                  details={"result": result})
         else:
             fail_task(task_id, result.get("error", "proxy failure"))
-            emit("proxy_failed", source="hermes", target=machine, task_id=task_id,
+            emit("proxy_failed", source="hermesmon", target=machine, task_id=task_id,
                  details={"error": result.get("error", "proxy failure")})
     except Exception as e:
         err = str(e)[:500]
         fail_task(task_id, err)
-        emit("proxy_failed", source="hermes", target=machine, task_id=task_id,
+        emit("proxy_failed", source="hermesmon", target=machine, task_id=task_id,
              details={"error": err, "exception": True})
 
 
@@ -560,6 +561,12 @@ _STATIC_DIR = _pathlib.Path(__file__).parent.parent / "static"
 # fell back to inline pixel art forever.
 app.mount("/sprites", StaticFiles(directory=str(_STATIC_DIR / "sprites")), name="sprites")
 app.mount("/docs", StaticFiles(directory=str(_STATIC_DIR / "docs")), name="docs")
+app.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static")
+
+
+@app.get("/", response_class=RedirectResponse)
+def root():
+    return RedirectResponse(url="/static/index.html")
 
 
 @app.get("/dashboard", response_class=HTMLResponse)

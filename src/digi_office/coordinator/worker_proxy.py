@@ -23,12 +23,14 @@ MACHINES = {
     "dgx_primary": {
         "host": "100.72.65.100",
         "user": "syeung",
-        "ssh_binary": "ssh",
+        "ssh_binary": "tailscale ssh",
+        "ssh_opts": [],
     },
     "dgx_secondary": {
         "host": "100.99.1.84",
         "user": "syeung",
-        "ssh_binary": "ssh",
+        "ssh_binary": "tailscale ssh",
+        "ssh_opts": [],
     },
 }
 
@@ -48,10 +50,20 @@ TASK_SCRIPTS = {
     "fhir_generate": None,  # placeholder until Synthea pipeline is set up
     "fhir_validate": ("~/LISA_FTM/scripts/validate_crosswalk_v2.py", True),
     "fhir_bundle_clean": None,  # SSH rm -rf handled inline
-    "llm_finetune": None,  # placeholder
+    "llm_finetune": None,  # placeholder — GPU tasks route to DGX via TASK_GPU_MACHINES
     "model_eval": ("~/LISA_FTM/scripts/test_phase_b_ontology.py", True),
     "model_export": None,
     "render_3d": None,
+}
+
+# ── GPU task routing: task_type → machine_id ─────────────────────────
+# Any task_type listed here MUST run on the specified GPU machine.
+TASK_GPU_MACHINES = {
+    "llm_finetune": "dgx_primary",           # Sprint 6 training
+    "sprint_training": "dgx_primary",        # Phase C DP-LoRA training
+    "byzantine_stress_test": "dgx_primary",  # GPU-based stress tests
+    "gate_eval": "dgx_primary",              # Perplexity gating on GPU
+    "model_export": "dgx_primary",           # Export checkpoints from GPU
 }
 
 
@@ -130,12 +142,22 @@ class WorkerProxy:
 
     def run_task(self, machine_id: str, task_type: str,
                  payload: dict, timeout: int = 300) -> tuple[bool, dict]:
+        """Route GPU tasks to DGX regardless of requested machine_id."""
+        # Force GPU tasks to their assigned DGX machine
+        if task_type in TASK_GPU_MACHINES:
+            target_machine = TASK_GPU_MACHINES[task_type]
+            if machine_id != target_machine:
+                logger.info(
+                    "Rerouting GPU task '%s' from %s → %s",
+                    task_type, machine_id, target_machine
+                )
+                machine_id = target_machine
         command = self._build_command(machine_id, task_type, payload)
         raw = self.run(machine_id, command, timeout)
         return self.parse_result(raw)
 
     def _build_command(self, machine_id: str, task_type: str, payload: dict) -> str:
-        payload_json = json.dumps(payload, separators=(',', ':')).replace("'", "\\'")
+        payload_json = json.dumps(payload, separators=(',', ':'))
 
         entry = TASK_SCRIPTS.get(task_type)
         if entry is None:
@@ -145,17 +167,44 @@ class WorkerProxy:
                 cwd = payload.get("cwd", "~/LISA_FTM")
                 script = " && ".join(commands)
                 return f"cd {cwd} && {script}"
-            # Fallback 2: generic digi_worker (placeholder)
-            return f"cd ~/LISA_FTM \u0026\u0026 python3 -m digi_worker run '{task_type}' '{payload_json}'"
+            # Fallback 2: generic digi_worker placeholder
+            return f"cd ~/LISA_FTM && python3 -m digi_worker run '{task_type}' '{payload_json}'"
 
         script_path, use_venv = entry
+        python = "python3"
+        if use_venv and MACHINES.get(machine_id):
+            # Most DGX/Jetson machines have a .venv
+            python = ".venv/bin/python"
 
-        # build python invocation
-        python = "~/LISA_FTM/.venv/bin/python3" if use_venv else "python3"
-        flags = ""
+        # Build args from payload
+        args = []
         for key, val in payload.items():
-            flags += f" --{key} '{str(val).replace(chr(39), chr(92)+chr(39))}'"
-        return f"cd ~/LISA_FTM \u0026\u0026 {python} {script_path}{flags}"
+            if val is True:
+                args.append(f"--{key}")
+            elif val is False or val is None:
+                continue
+            else:
+                args.append(f"--{key} {val}")
+
+        args_str = " ".join(args)
+        return f"cd ~/LISA_FTM && {python} {script_path} {args_str}"
+
+    @staticmethod
+    def requires_gpu(task_type: str, payload: dict = None) -> bool:
+        """Check if a task requires GPU based on type or payload flags."""
+        if task_type in TASK_GPU_MACHINES:
+            return True
+        # Also detect from payload hints (e.g., device=cuda, use_gpu=true)
+        if payload:
+            device = str(payload.get("device", "")).lower()
+            if "cuda" in device or payload.get("use_gpu") is True:
+                return True
+        return False
+
+    @staticmethod
+    def get_gpu_machine(task_type: str) -> Optional[str]:
+        """Return the DGX machine assigned to a GPU task type, or None."""
+        return TASK_GPU_MACHINES.get(task_type)
 
 
 proxy = WorkerProxy()

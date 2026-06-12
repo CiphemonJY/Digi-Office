@@ -268,11 +268,50 @@ class Agent:
 
         self._current_task_id = task.id
         logger.info("Executing task %s (%s)", task.id[:8], task.type)
+
+        # ── Memory: recall before execution (optional, no hard dependency) ──
+        if hasattr(self, '_memory_con'):
+            try:
+                import agent_memory as am
+                mems = am.recall(self._memory_con, task.type, k=3)
+                if mems:
+                    mem_str = " | ".join(f"[{m['entity']}] {m['summary'][:120]}" for m in mems)
+                    logger.info("memory recall → %s", mem_str)
+            except ImportError:
+                pass
+
         try:
             result = handler(task)
+            # ── Memory: capture result after success ──────────────────────
+            if hasattr(self, '_memory_con'):
+                try:
+                    import agent_memory as am
+                    am.capture(
+                        self._memory_con,
+                        content=f"task_id={task.id} type={task.type} "
+                                f"result_keys={list((result or {}).keys()) if result else []}",
+                        type="task_result",
+                        entity="revalomon_tasks",
+                        importance=0.6,
+                    )
+                except ImportError:
+                    pass
             self.complete_task(task.id, result or {})
             logger.info("Task %s done", task.id[:8])
         except Exception as e:
+            # ── Memory: capture error ─────────────────────────────────────
+            if hasattr(self, '_memory_con'):
+                try:
+                    import agent_memory as am
+                    am.capture(
+                        self._memory_con,
+                        content=f"task_id={task.id} type={task.type} ERROR: {e}",
+                        type="task_error",
+                        entity="revalomon_tasks",
+                        importance=0.85,
+                    )
+                except ImportError:
+                    pass
             logger.exception("Task %s failed", task.id[:8])
             self.fail_task(task.id, str(e))
         finally:
@@ -302,6 +341,17 @@ class Agent:
                     self.check_inbox()
         self._heartbeat_thread = threading.Thread(target=loop, daemon=True)
         self._heartbeat_thread.start()
+
+    def _start_inbox_thread(self, poll_interval: int = 10):
+        """Dedicated inbox polling — faster than 25s heartbeat."""
+        def loop():
+            while self.running:
+                time.sleep(poll_interval)
+                if self.running:
+                    self.check_inbox()
+        t = threading.Thread(target=loop, daemon=True)
+        t.start()
+        return t
 
     def _handle_sigterm(self, signum, frame):
         logger.info("Signal %s received — stopping", signum)

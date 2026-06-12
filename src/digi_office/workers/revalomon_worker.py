@@ -18,6 +18,7 @@ import os
 import subprocess
 import sys
 import time
+from functools import partial
 from pathlib import Path
 
 # Per-machine config via env; the previous hardcoded path (and an undefined
@@ -25,6 +26,19 @@ from pathlib import Path
 # fail all tasks on any host but the original author's.
 VENV_PYTHON = os.environ.get("LISA_VENV_PYTHON", sys.executable)
 LISA_FTM_ROOT = Path(os.environ.get("LISA_FTM_ROOT", "~/LISA_FTM")).expanduser()
+
+# ── agent_memory (optional — no hard dependency) ──────────────────────
+MEMORY_DB = str(LISA_FTM_ROOT / "agent_memory.db")
+try:
+    import agent_memory as am
+    _con = am.init_db(MEMORY_DB)
+    am.recover(_con)
+    logger_mem = logging.getLogger("revalomon_worker")
+    logger_mem.info("agent_memory ready — %s", am.db_stats(_con))
+    HAS_MEMORY = True
+except ImportError:
+    _con = None
+    HAS_MEMORY = False
 
 
 from digi_office.agent_sdk.agent import Agent
@@ -178,6 +192,123 @@ def handle_status_message(agent, message):
     )
 
 
+def handle_action_request(agent, message):
+    """Respond to action requests from Hermesmon — always reply with status."""
+    logger.info("Action request from %s: %s", message.from_agent, message.payload)
+    agent.send_message(
+        to_agent=message.from_agent,
+        message_type="action_ack",
+        payload={
+            "status": "received",
+            "note": f"Revalomon received action_request for task {message.payload.get('task_id', 'unknown')}",
+            "inbox_check_interval": "10s",
+        },
+    )
+
+
+def handle_generic_message(agent, message):
+    """Catch-all handler — logs and acknowledges any unhandled message type."""
+    print(f"[catch-all] unhandled type '{message.message_type}' from {message.from_agent}: {message.payload}", file=sys.stderr)
+    try:
+        agent.send_message(
+            to_agent=message.from_agent,
+            message_type="status_reply",
+            payload={
+                "agent": "revalomon",
+                "status": "received",
+                "note": f"unhandled type '{message.message_type}' — no handler registered",
+                "received_payload": message.payload,
+            },
+        )
+        print(f"[catch-all] reply sent to {message.from_agent}", file=sys.stderr)
+    except Exception as e:
+        print(f"[catch-all] reply FAILED: {e}", file=sys.stderr)
+
+
+def handle_command(agent, message):
+    """Respond to commands from Hermesmon — execute script if present."""
+    payload = message.payload
+    label = payload.get("label", "unnamed")
+    script = payload.get("script") or payload.get("command")
+    cwd = payload.get("cwd", str(LISA_FTM_ROOT))
+    logger.info("Command '%s' from %s: %s", label, message.from_agent, payload)
+
+    if script:
+        import shlex
+        logger.info("Executing: %s", script)
+        try:
+            # Use list form to prevent shell injection
+            cmd = shlex.split(script)
+            result = subprocess.run(
+                cmd,
+                shell=False,
+                cwd=cwd,
+                capture_output=True,
+                text=True,
+                timeout=120,
+            )
+            reply_text = f"OK rc={result.returncode}\nstdout: {result.stdout[-1000:]}\nstderr: {result.stderr[-500:]}"
+        except Exception as e:
+            reply_text = f"ERROR: {e}"
+    else:
+        reply_text = "received (no script to execute)"
+
+    agent.send_message(
+        to_agent=message.from_agent,
+        message_type="command_ack",
+        payload={
+            "status": "done",
+            "label": label,
+            "result": reply_text,
+        },
+    )
+
+
+def handle_data_sync(agent, task):
+    """Handle data_sync tasks — git pull / branch sync operations."""
+    payload = task.payload or {}
+    action = payload.get("action", "")
+    branch = payload.get("branch", "")
+    cwd = str(LISA_FTM_ROOT)
+
+    agent.task_progress(task.id, "data_sync", f"action={action} branch={branch}")
+
+    if action == "git_pull" and branch:
+        result = subprocess.run(
+            ["git", "fetch", "origin", branch], cwd=cwd, capture_output=True, text=True, timeout=120
+        )
+        if result.returncode != 0:
+            return {"stdout": result.stdout[-2000:], "stderr": result.stderr[-1000:], "returncode": result.returncode, "action": action, "branch": branch}
+        result = subprocess.run(
+            ["git", "checkout", branch], cwd=cwd, capture_output=True, text=True, timeout=60
+        )
+        if result.returncode != 0:
+            return {"stdout": result.stdout[-2000:], "stderr": result.stderr[-1000:], "returncode": result.returncode, "action": action, "branch": branch}
+        result = subprocess.run(
+            ["git", "pull", "--ff-only", "origin", branch], cwd=cwd, capture_output=True, text=True, timeout=120
+        )
+        return {
+            "stdout": result.stdout[-2000:],
+            "stderr": result.stderr[-1000:],
+            "returncode": result.returncode,
+            "action": action,
+            "branch": branch,
+        }
+    elif action == "git_push" and branch:
+        result = subprocess.run(
+            ["git", "push", "origin", branch], cwd=cwd, capture_output=True, text=True, timeout=60
+        )
+        return {
+            "stdout": result.stdout[-2000:],
+            "stderr": result.stderr[-1000:],
+            "returncode": result.returncode,
+            "action": action,
+            "branch": branch,
+        }
+    else:
+        raise ValueError(f"data_sync: unknown action '{action}' or missing branch")
+
+
 # ── Main ─────────────────────────────────────────────────────────────────────────
 
 def main():
@@ -191,8 +322,10 @@ def main():
     agent = Agent(
         agent_id="revalomon",
         coordinator_url=args.coordinator,
-        capabilities=["validation", "gate", "byzantine", "heatmap", "python"],
+        capabilities=["validation", "gate", "byzantine", "heatmap", "python", "git", "linux"],
     )
+    if HAS_MEMORY:
+        agent._memory_con = _con  # attach persistent memory connection
 
     # Register task handlers
     agent.task_handler("sprint4_gate")(lambda t: handle_sprint_gate(agent, t))
@@ -200,12 +333,26 @@ def main():
     agent.task_handler("sprint4_heatmap")(lambda t: handle_sprint_heatmap(agent, t))
     agent.task_handler("sprint5_gate")(lambda t: handle_sprint_gate(agent, t))
     agent.task_handler("sprint5_byzantine")(lambda t: handle_sprint_byzantine(agent, t))
+    agent.task_handler("byzantine_eval")(lambda t: handle_sprint_byzantine(agent, t))
     agent.task_handler("sprint5_heatmap")(lambda t: handle_sprint_heatmap(agent, t))
     agent.task_handler("model_eval")(lambda t: handle_generic_eval(agent, t))
     agent.task_handler("generic_eval")(lambda t: handle_generic_eval(agent, t))
+    agent.task_handler("data_sync")(lambda t: handle_data_sync(agent, t))
 
     # Register message handlers
-    agent.message_handler("status_query")(handle_status_message)
+    agent.message_handler("status_query")(partial(handle_status_message, agent=agent))
+    agent.message_handler("status")(partial(handle_status_message, agent=agent))
+    agent.message_handler("status_update")(partial(handle_status_message, agent=agent))
+    agent.message_handler("action_request")(partial(handle_action_request, agent=agent))
+    agent.message_handler("command")(partial(handle_command, agent=agent))
+    agent.message_handler("*")(partial(handle_generic_message, agent=agent))  # catch-all
+
+    # Consolidate if 10+ unconsolidated events have accumulated
+    if HAS_MEMORY:
+        stats = am.db_stats(_con)
+        if stats["events_unconsolidated"] >= 10:
+            n = am.consolidate(_con)
+            logger.info("consolidated %d events", n)
 
     logger.info("Starting Revalomon worker — coordinator=%s poll_interval=%ds",
                 args.coordinator, args.poll_interval)
