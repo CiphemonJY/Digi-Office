@@ -22,8 +22,8 @@ def heartbeat():
             f"{COORDINATOR}/agents/{AGENT_ID}/heartbeat",
             json={
                 "agent_id": AGENT_ID,
-                "hostname": "hermes-wsl",
-                "tailscale_ip": "100.113.198.30",
+                "hostname": "controller-node",
+                "tailscale_ip": "198.51.100.1",
                 "capabilities": CAPABILITIES,
                 "current_task_id": None,
             },
@@ -87,7 +87,7 @@ def handle_fleet_sync(task):
         # Proxy via SSH
         ssh_cmd = [
             "ssh", "-o", "StrictHostKeyChecking=no", "-o", "BatchMode=yes",
-            f"syeung@{target}", *command,
+            f"user@{target}", *command,
         ]
     else:
         # Local execution

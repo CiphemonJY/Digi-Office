@@ -744,10 +744,10 @@ const DEMO_AGENTS = [
   {id:'ciphemon', hostname:'macbook.local', tailscale_ip:'100.x.x.x',
    capabilities:'["python","embeddings","crosswalk","macos"]',
    online:1, current_task_id:null, _demo:true},
-  {id:'hermes',   hostname:'hermes-wsl',   tailscale_ip:'100.113.198.30',
+  {id:'hermes',   hostname:'controller-node',   tailscale_ip:'198.51.100.1',
    capabilities:'["python","ssh","git","coordinator"]',
    online:1, current_task_id:'7f3a9c21-busy', _demo:true},
-  {id:'jetson',   hostname:'jetson-nano',  tailscale_ip:'10.0.0.121',
+  {id:'jetson',   hostname:'edge-node',  tailscale_ip:'198.51.100.20',
    capabilities:'["gpu","fhir","validate"]',
    online:0, current_task_id:null, _demo:true},
 ];

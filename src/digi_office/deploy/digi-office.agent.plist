@@ -4,21 +4,21 @@
 <plist version="1.0">
 <dict>
   <key>Label</key>
-  <string>ai.openclaw.digi-office</string>
+  <string>digi-office.agent</string>
   <key>ProgramArguments</key>
   <array>
     <string>/usr/bin/python3</string>
-    <string>/Users/ciphemon/.openclaw/scripts/ciphemon_agent.py</string>
+    <string>$HOME/.config/digi-office/scripts/ciphemon_agent.py</string>
   </array>
   <key>RunAtLoad</key>
   <true/>
   <key>KeepAlive</key>
   <true/>
   <key>StandardOutPath</key>
-  <string>/Users/ciphemon/.openclaw/logs/digi-office.log</string>
+  <string>$HOME/.config/digi-office/logs/digi-office.log</string>
   <key>StandardErrorPath</key>
-  <string>/Users/ciphemon/.openclaw/logs/digi-office.err</string>
+  <string>$HOME/.config/digi-office/logs/digi-office.err</string>
   <key>WorkingDirectory</key>
-  <string>/Users/ciphemon/.openclaw/workspace/digi_office</string>
+  <string>$HOME/.config/digi-office/workspace/digi_office</string>
 </dict>
 </plist>

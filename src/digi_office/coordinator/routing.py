@@ -98,7 +98,7 @@ ROUTING_TABLE = {
 
     # ── DGX CUDA training (dispatches to cluster) ──────────────────
     # Use for any torchrun/torch.distributed work on the 2-GPU cluster.
-    # Nodes: spark (100.72.65.100) + spark-8686 (100.99.1.84).
+    # Nodes: spark (198.51.100.10) + worker-node-2 (198.51.100.11).
     # Supports nnodes=1 (single-node) or nnodes=2 (distributed).
     "dgx_training": {
         "default": "dgx_primary",

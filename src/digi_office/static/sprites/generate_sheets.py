@@ -15,8 +15,8 @@ States: idle, work, sleep, tool
 import os
 from PIL import Image, ImageEnhance, ImageFilter, ImageOps
 
-SRC_DIR = os.path.expanduser("~/.openclaw/workspace/Digivolution photos")
-CLEAN_DIR = os.path.expanduser("~/.openclaw/workspace/LISA_FTM/digi_office/static/sprites")
+SRC_DIR = os.path.expanduser("~/.config/digi-office/Digivolution photos")
+CLEAN_DIR = os.path.expanduser("~/.config/digi-office/LISA_FTM/digi_office/static/sprites")
 OUT_DIR = CLEAN_DIR
 
 FORMS = {

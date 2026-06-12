@@ -1,8 +1,12 @@
 # Digi-Office
 
-Agent-to-agent task coordination framework.
+Agent-to-agent task coordination framework — dispatch, track, and retry tasks
+across a fleet of autonomous AI agents, with a dependency-gated task queue,
+dead-letter handling, goal pipelines, and a live dashboard.
 
-Used by OpenClaw (hospital CI) and LISA_FTM (federated learning) to dispatch, track, and retry tasks across autonomous AI agents (Ciphemon, Revalomon, Hermesmon).
+Built to coordinate a heterogeneous fleet (GPU nodes, edge devices, laptops)
+running distributed ML and data-processing jobs without losing a result or
+double-running a task.
 
 ## Quickstart
 

@@ -2,10 +2,10 @@
 # Run on Ciphemon (Mac) to install the agent.
 set -euo pipefail
 
-WORKSPACE="$HOME/.openclaw/workspace/digi_office"
-SCRIPTS="$HOME/.openclaw/scripts"
-LOGS="$HOME/.openclaw/logs"
-PLIST="$HOME/Library/LaunchAgents/ai.openclaw.digi-office.plist"
+WORKSPACE="$HOME/.config/digi-office/workspace/digi_office"
+SCRIPTS="$HOME/.config/digi-office/scripts"
+LOGS="$HOME/.config/digi-office/logs"
+PLIST="$HOME/Library/LaunchAgents/digi-office.agent.plist"
 
 echo "=== Digi-Office Ciphemon Setup ==="
 
@@ -20,7 +20,7 @@ cp deploy/ciphemon_agent.py "$SCRIPTS/"
 pip3 install --quiet requests
 
 # 4. Register launchd service
-cp deploy/ai.openclaw.digi-office.plist "$PLIST"
+cp deploy/digi-office.agent.plist "$PLIST"
 launchctl unload "$PLIST" 2>/dev/null || true
 launchctl load "$PLIST"
 
