@@ -87,6 +87,26 @@ ROUTING_TABLE = {
         "proxy": True,
     },
 
+    # ── LLM Sleep (Ciphemon's sleep-enhanced embedder) ─────────────
+    # Paper: arXiv:2605.26099v3 — multi-pass embedding consolidation.
+    "sleep_consolidation": {
+        "default": "ciphemon",
+        "fallback": "dgx_primary",
+        "required_capabilities": ["validation"],
+        "proxy": False,
+    },
+
+    # ── DGX CUDA training (dispatches to cluster) ──────────────────
+    # Use for any torchrun/torch.distributed work on the 2-GPU cluster.
+    # Nodes: spark (100.72.65.100) + spark-8686 (100.99.1.84).
+    # Supports nnodes=1 (single-node) or nnodes=2 (distributed).
+    "dgx_training": {
+        "default": "dgx_primary",
+        "fallback": "dgx_secondary",
+        "required_capabilities": ["gpu", "cuda"],
+        "proxy": True,
+    },
+
 }
 
 
