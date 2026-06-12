@@ -1,4 +1,5 @@
 import json
+import os
 import subprocess
 import time
 import logging
@@ -6,14 +7,21 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-MACHINES = {
+# Root of the project whose scripts the proxied tasks run, on the remote node.
+PROJECT_ROOT = os.environ.get("PROJECT_ROOT", "~/project")
+
+# Fleet definition. Configure for your own machines via the DIGI_OFFICE_MACHINES
+# env var (path to a JSON file shaped like _EXAMPLE_MACHINES), or via the
+# per-node *_HOST / *_USER env vars below. The defaults are placeholders
+# (RFC 5737 documentation IPs) — they are not real hosts.
+_EXAMPLE_MACHINES = {
     "jetson": {
-        "host": "10.0.0.121",
-        "user": "jetson",
-        "key": "~/.ssh/id_ed25519_openclaw",
+        "host": os.environ.get("EDGE_HOST", "203.0.113.20"),
+        "user": os.environ.get("EDGE_USER", "user"),
+        "key": "~/.ssh/id_ed25519",
         "ssh_binary": "ssh",
         "ssh_opts": [
-            "-o", "StrictHostKeyChecking=no",
+            "-o", "StrictHostKeyChecking=accept-new",
             "-o", "BatchMode=yes",
             "-o", "ConnectTimeout=15",
             "-o", "ServerAliveInterval=30",
@@ -21,16 +29,27 @@ MACHINES = {
         ],
     },
     "dgx_primary": {
-        "host": "100.72.65.100",
-        "user": "syeung",
+        "host": os.environ.get("GPU_PRIMARY_HOST", "203.0.113.10"),
+        "user": os.environ.get("GPU_PRIMARY_USER", "user"),
         "ssh_binary": "ssh",
     },
     "dgx_secondary": {
-        "host": "100.99.1.84",
-        "user": "syeung",
+        "host": os.environ.get("GPU_SECONDARY_HOST", "203.0.113.11"),
+        "user": os.environ.get("GPU_SECONDARY_USER", "user"),
         "ssh_binary": "ssh",
     },
 }
+
+
+def _load_machines() -> dict:
+    cfg = os.environ.get("DIGI_OFFICE_MACHINES")
+    if cfg and os.path.exists(cfg):
+        with open(cfg) as f:
+            return json.load(f)
+    return _EXAMPLE_MACHINES
+
+
+MACHINES = _load_machines()
 
 SSH_OPTS = [
     "-o", "StrictHostKeyChecking=no",
@@ -43,13 +62,13 @@ SSH_OPTS = [
 # ── Task handler map: task_type → (script_path, venv?) ──────────────
 TASK_SCRIPTS = {
     "expand_ontology": None,  # handled by Ciphemon agent, not proxy
-    "ontology_validate": ("~/LISA_FTM/scripts/validate_crosswalk_v2.py", True),
-    "ontology_quality_check": ("~/LISA_FTM/scripts/test_phase_b_ontology.py", True),
+    "ontology_validate": (PROJECT_ROOT + "/scripts/validate_crosswalk_v2.py", True),
+    "ontology_quality_check": (PROJECT_ROOT + "/scripts/test_phase_b_ontology.py", True),
     "fhir_generate": None,  # placeholder until Synthea pipeline is set up
-    "fhir_validate": ("~/LISA_FTM/scripts/validate_crosswalk_v2.py", True),
+    "fhir_validate": (PROJECT_ROOT + "/scripts/validate_crosswalk_v2.py", True),
     "fhir_bundle_clean": None,  # SSH rm -rf handled inline
     "llm_finetune": None,  # placeholder
-    "model_eval": ("~/LISA_FTM/scripts/test_phase_b_ontology.py", True),
+    "model_eval": (PROJECT_ROOT + "/scripts/test_phase_b_ontology.py", True),
     "model_export": None,
     "render_3d": None,
 }
@@ -142,20 +161,20 @@ class WorkerProxy:
             # Fallback 1: payload.commands — direct shell chain (ciphemon pattern)
             commands = payload.get("commands")
             if commands and isinstance(commands, list):
-                cwd = payload.get("cwd", "~/LISA_FTM")
+                cwd = payload.get("cwd", "$PROJECT_ROOT")
                 script = " && ".join(commands)
                 return f"cd {cwd} && {script}"
             # Fallback 2: generic digi_worker (placeholder)
-            return f"cd ~/LISA_FTM \u0026\u0026 python3 -m digi_worker run '{task_type}' '{payload_json}'"
+            return f"cd $PROJECT_ROOT \u0026\u0026 python3 -m digi_worker run '{task_type}' '{payload_json}'"
 
         script_path, use_venv = entry
 
         # build python invocation
-        python = "~/LISA_FTM/.venv/bin/python3" if use_venv else "python3"
+        python = PROJECT_ROOT + "/.venv/bin/python3" if use_venv else "python3"
         flags = ""
         for key, val in payload.items():
             flags += f" --{key} '{str(val).replace(chr(39), chr(92)+chr(39))}'"
-        return f"cd ~/LISA_FTM \u0026\u0026 {python} {script_path}{flags}"
+        return f"cd $PROJECT_ROOT \u0026\u0026 {python} {script_path}{flags}"
 
 
 proxy = WorkerProxy()

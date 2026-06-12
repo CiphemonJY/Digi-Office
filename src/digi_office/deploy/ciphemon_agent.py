@@ -1,21 +1,23 @@
 """
-Ciphemon agent — runs on Mac, connects to Hermes coordinator.
-Deploy to: ~/.openclaw/scripts/ciphemon_agent.py
+Example worker agent — connects to a coordinator and handles two task types.
+A reference for writing your own agent; configure via env vars.
+
+    DIGI_OFFICE_URL   coordinator base URL (default http://127.0.0.1:8080)
+    AGENT_ID          this agent's id (default "worker")
+    PROJECT_ROOT      path to the project whose scripts the tasks run
 """
-import sys
 import os
 
-# Adjust path if running standalone
-sys.path.insert(0, os.path.expanduser("~/.openclaw/workspace/digi_office"))
+from digi_office.agent_sdk.agent import Agent, Task
 
-from agent_sdk import Agent, Task
-
-COORDINATOR = "http://100.113.198.30:8080"
+COORDINATOR = os.environ.get("DIGI_OFFICE_URL", "http://127.0.0.1:8080")
+AGENT_ID = os.environ.get("AGENT_ID", "worker")
+PROJECT_ROOT = os.path.expanduser(os.environ.get("PROJECT_ROOT", "~/project"))
 
 agent = Agent(
-    agent_id="ciphemon",
+    agent_id=AGENT_ID,
     coordinator_url=COORDINATOR,
-    capabilities=["python", "embeddings", "crosswalk", "macos"],
+    capabilities=["python", "embeddings"],
 )
 
 
@@ -25,7 +27,7 @@ def handle_expand_ontology(task: Task) -> dict:
     output_path = task.payload.get("output_path", f"db_523/{system}_ontology_mem.pkl")
 
     # Import existing logic — adjust path as needed
-    expand_script = os.path.expanduser("~/.openclaw/workspace/LISA_FTM/scripts/expand_snomed_ontology.py")
+    expand_script = os.path.join(PROJECT_ROOT, "scripts", "expand_snomed_ontology.py")
     if not os.path.exists(expand_script):
         raise FileNotFoundError(f"Expand script not found: {expand_script}")
 
@@ -43,7 +45,7 @@ def handle_expand_ontology(task: Task) -> dict:
 @agent.task_handler("data_sync")
 def handle_data_sync(task: Task) -> dict:
     import subprocess
-    repo = task.payload.get("repo", os.path.expanduser("~/LISA_FTM"))
+    repo = task.payload.get("repo", PROJECT_ROOT)
     result = subprocess.run(
         ["git", "-C", repo, "pull", "--rebase"],
         capture_output=True, text=True, timeout=60,

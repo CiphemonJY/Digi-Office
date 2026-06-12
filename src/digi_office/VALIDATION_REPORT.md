@@ -16,7 +16,7 @@ Digi_Office/
 │   └── agent.py         ← Python SDK for smart agents (Ciphemon, future agents)
 ├── deploy/
 │   ├── digi-office.service           ← systemd unit (Hermes)
-│   ├── ai.openclaw.digi-office.plist ← launchd agent (Ciphemon)
+│   ├── digi-office.agent.plist ← launchd agent (Ciphemon)
 │   ├── ciphemon_agent.py             ← ready-to-use agent script
 │   ├── setup_hermes.sh              ← one-command Hermes setup
 │   └── setup_ciphemon.sh            ← one-command Ciphemon setup
@@ -32,9 +32,9 @@ Digi_Office/
 ```
 
 ## Core Architecture ✅
-- **Coordinator** (FastAPI): runs on Hermes (WSL) at `100.113.198.30:8080`
+- **Coordinator** (FastAPI): runs on Hermes (WSL) at `198.51.100.1:8080`
 - **Smart Agents** (Agent SDK): Ciphemon (Mac), any future machine
-- **Dumb Workers** (SSH proxy): Jetson `10.0.0.121`, DGX `100.72.65.100`
+- **Dumb Workers** (SSH proxy): Jetson `198.51.100.20`, DGX `198.51.100.10`
 
 ## Features Validated
 
@@ -87,8 +87,8 @@ Tests pass individually but flake in batch due to SQLite concurrent access on ma
 | Coordinator | Hermes (WSL) | ⏳ Not yet deployed |
 | Agent SDK | Ciphemon (Mac) | ✅ Code ready, needs launchd load |
 | Ciphemon agent | Mac Mini | ✅ Script ready at `deploy/ciphemon_agent.py` |
-| Jetson proxy | Jetson `10.0.0.121` | ⏳ SSH auth already works |
-| DGX proxy | DGX `100.72.65.100` | ⏳ SSH auth already works |
+| Jetson proxy | Jetson `198.51.100.20` | ⏳ SSH auth already works |
+| DGX proxy | DGX `198.51.100.10` | ⏳ SSH auth already works |
 
 ## Next Steps
 
@@ -101,5 +101,5 @@ Tests pass individually but flake in batch due to SQLite concurrent access on ma
 - `Digi_Office/coordinator/db.py` — Fixed `claim_task()` starvation bug
 
 *Validated: 2026-06-04 14:35 CDT*
-*Coordinator: Hermes (WSL) @ 100.113.198.30:8080*
-*Agent: Ciphemon (Mac Mini) @ 100.79.58.88*
+*Coordinator: Hermes (WSL) @ 198.51.100.1:8080*
+*Agent: Ciphemon (Mac Mini) @ 198.51.100.1*

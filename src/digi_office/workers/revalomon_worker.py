@@ -5,7 +5,7 @@ queue and executes assigned tasks automatically.
 
 Usage:
     python -m digi_office.workers.revalomon_worker \
-        --coordinator http://100.113.198.30:8080 \
+        --coordinator http://198.51.100.1:8080 \
         --poll-interval 10
 
 Or run standalone (coordinator URL defaults to localhost:8080 if DIGI_OFFICE_URL env is set,

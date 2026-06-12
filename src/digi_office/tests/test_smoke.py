@@ -1,7 +1,7 @@
 """
 Smoke tests — run against a live coordinator at COORDINATOR_URL.
 Usage:
-  COORDINATOR_URL=http://100.119.15.111:8080 python -m pytest tests/test_smoke.py -v
+  COORDINATOR_URL=http://198.51.100.1:8080 python -m pytest tests/test_smoke.py -v
 """
 import json
 import os
