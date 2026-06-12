@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-Ciphemon Agent — Connected to Hermes Coordinator.
+Ciphemon Agent — Direct Coordinator Integration.
 
-Handles sleep_consolidation tasks with real-time coordinator integration.
+Polls coordinator for tasks using GET /tasks/claim.
 """
 
 import json
@@ -15,52 +15,15 @@ from pathlib import Path
 import numpy as np
 import requests
 
-sys.path.insert(0, str(Path(__file__).parent / "src"))
-
-# Try to import SDK
-try:
-    from digi_office.agent_sdk.agent import Agent
-    SDK_AVAILABLE = True
-except ImportError:
-    SDK_AVAILABLE = False
-    # Minimal fallback
-    class Agent:
-        def __init__(self, agent_id, coordinator_url, capabilities, token=None):
-            self.agent_id = agent_id
-            self.coordinator_url = coordinator_url
-            self.capabilities = capabilities
-            self.token = token
-            self.session = requests.Session()
-            if token:
-                self.session.headers.update({"Authorization": f"Bearer {token}"})
-        
-        def task_handler(self, name):
-            def decorator(func):
-                setattr(self, f"handle_{name}", func)
-                return func
-            return decorator
-        
-        def start(self):
-            print(f"Agent {self.agent_id} started")
-            print(f"Coordinator: {self.coordinator_url}")
-            print(f"Capabilities: {self.capabilities}")
-            # Keep alive
-            while True:
-                time.sleep(30)
-        
-        def run(self, poll_interval=5, register_retries=0):
-            self.start()
-
-
 # Configuration
 COORDINATOR = "http://100.119.15.111:8080"
 TOKEN = os.environ.get("DIGI_OFFICE_TOKEN", "8ecbedddd485c64eda2f49b7c1b78c800ddee8541eb92616a5f5a26c9ba217e1")
 DB_PATH = "/Users/Ciphemon/.openclaw/workspace/LISA_FTM/db_523/ontology_mem_expanded.pkl"
-ALPHA = 2.339  # From Phase 1b training
+ALPHA = 2.339
 
 
 class SleepEngine:
-    """Sleep consolidation engine with scalar-α."""
+    """Sleep consolidation engine."""
     
     def __init__(self, ontology_path: str, alpha: float = 2.339):
         with open(ontology_path, 'rb') as f:
@@ -115,40 +78,18 @@ class SleepEngine:
         return current
 
 
-# Initialize engine
-engine = SleepEngine(DB_PATH, ALPHA)
-print(f"✓ SleepEngine loaded: {len(engine.codes)} concepts, alpha={ALPHA}")
-
-
-# Create agent
-agent = Agent(
-    agent_id="ciphemon",
-    coordinator_url=COORDINATOR,
-    capabilities=["sleep_consolidation", "data_processing", "validation"],
-    token=TOKEN
-)
-
-
-@agent.task_handler("sleep_consolidation")
-def handle_sleep_consolidation(task):
-    """Handle sleep_consolidation tasks."""
-    payload = task.payload if hasattr(task, 'payload') else task.get("payload", {})
-    
-    concept_code = payload.get("concept_code")
-    n_passes = payload.get("n_passes", 4)
+def handle_sleep_task(task_payload: dict) -> dict:
+    """Process a sleep_consolidation task."""
+    concept_code = task_payload.get("concept_code")
+    n_passes = task_payload.get("n_passes", 4)
     
     if not concept_code or concept_code not in engine.codes:
-        return {
-            "status": "error",
-            "error": f"Concept {concept_code} not found"
-        }
+        return {"status": "error", "error": f"Concept {concept_code} not found"}
     
-    # Run sleep consolidation
     idx = engine.codes.index(concept_code)
     source_vec = engine.embeddings[idx].copy()
     sleep_vec = engine.sleep_consolidate(source_vec, n_passes=n_passes)
     
-    # Find neighbors
     neighbors = engine.find_similar(sleep_vec, top_k=5)
     
     return {
@@ -167,29 +108,94 @@ def handle_sleep_consolidation(task):
     }
 
 
+# Initialize engine
+engine = SleepEngine(DB_PATH, ALPHA)
+print(f"✓ SleepEngine loaded: {len(engine.codes)} concepts, alpha={ALPHA}")
+
+
 def main():
     print("=" * 60)
-    print("CIPHEMON AGENT — Coordinator Connection")
+    print("CIPHEMON AGENT — Direct Coordinator Mode")
     print("=" * 60)
     print(f"Coordinator: {COORDINATOR}")
-    print(f"Token: {TOKEN[:8]}...{TOKEN[-8:]}")
-    print(f"Capabilities: {agent.capabilities}")
     
-    # Test coordinator health
+    headers = {}
+    if TOKEN:
+        headers["Authorization"] = f"Bearer {TOKEN}"
+    
+    # Test health
     try:
         resp = requests.get(f"{COORDINATOR}/health", timeout=5)
-        print(f"\n✓ Coordinator health: {resp.status_code} — {resp.text[:50]}")
+        health = resp.json()
+        print(f"\n✓ Coordinator health: {health}")
     except Exception as e:
         print(f"\n⚠ Coordinator unreachable: {e}")
-        print("  Starting in standalone mode...")
+        return
     
-    print("\n[READY] Agent starting...")
+    agent_id = "ciphemon"
     
-    # Try SDK run method, fallback to start
-    if SDK_AVAILABLE:
-        agent.run()
-    else:
-        agent.start()
+    print(f"\n[READY] Agent '{agent_id}' starting poll loop...")
+    print("Press Ctrl+C to stop\n")
+    
+    try:
+        while True:
+            # Send heartbeat
+            try:
+                hb_resp = requests.post(
+                    f"{COORDINATOR}/agents/{agent_id}/heartbeat",
+                    headers=headers,
+                    timeout=10
+                )
+                if hb_resp.status_code == 200:
+                    print(f"♥ Heartbeat OK", end="\r")
+            except Exception as e:
+                print(f"♥ Heartbeat failed: {e}")
+            
+            # Claim task
+            try:
+                claim_resp = requests.get(
+                    f"{COORDINATOR}/tasks/claim",
+                    headers=headers,
+                    params={"agent_id": agent_id, "capabilities": "data_processing,validation"},
+                    timeout=10
+                )
+                
+                if claim_resp.status_code == 200:
+                    task = claim_resp.json()
+                    print(f"\n✓ Claimed task: {task.get('id')} ({task.get('type')})")
+                    
+                    # Process task
+                    if task.get("type") == "sleep_consolidation":
+                        result = handle_sleep_task(task.get("payload", {}))
+                        
+                        # Complete task
+                        complete_resp = requests.post(
+                            f"{COORDINATOR}/tasks/{task['id']}/complete",
+                            headers={**headers, "Content-Type": "application/json"},
+                            json={"result": result},
+                            timeout=10
+                        )
+                        print(f"  → Completed: {complete_resp.status_code}")
+                        print(f"  → Result: {json.dumps(result, indent=2)[:200]}")
+                    else:
+                        # Release unknown task type
+                        requests.post(
+                            f"{COORDINATOR}/tasks/{task['id']}/release",
+                            headers=headers,
+                            timeout=10
+                        )
+                        print(f"  → Released (unknown type)")
+                
+                elif claim_resp.status_code == 204:
+                    print("· No tasks available", end="\r")
+                
+            except Exception as e:
+                print(f"\n⚠ Claim failed: {e}")
+            
+            time.sleep(5)
+    
+    except KeyboardInterrupt:
+        print("\n\n👋 Agent stopped.")
 
 
 if __name__ == "__main__":
