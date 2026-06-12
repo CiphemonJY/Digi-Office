@@ -17,7 +17,7 @@ import requests
 
 # Configuration
 COORDINATOR = "http://100.119.15.111:8080"
-TOKEN = os.environ.get("DIGI_OFFICE_TOKEN", "8ecbedddd485c64eda2f49b7c1b78c800ddee8541eb92616a5f5a26c9ba217e1")
+TOKEN = ***"DIGI_OFFICE_TOKEN", "8ecbedddd485c64eda2f49b7c1b78c800ddee8541eb92616a5f5a26c9ba217e1")
 DB_PATH = "/Users/Ciphemon/.openclaw/workspace/LISA_FTM/db_523/ontology_mem_expanded.pkl"
 ALPHA = 2.339
 
@@ -78,18 +78,20 @@ class SleepEngine:
         return current
 
 
-def handle_sleep_task(task_payload: dict) -> dict:
-    """Process a sleep_consolidation task."""
+def handle_sleep_consolidation(task_payload: dict) -> dict:
+    """Handle sleep_consolidation task from coordinator."""
     concept_code = task_payload.get("concept_code")
     n_passes = task_payload.get("n_passes", 4)
     
     if not concept_code or concept_code not in engine.codes:
         return {"status": "error", "error": f"Concept {concept_code} not found"}
     
+    # Run sleep consolidation on the concept
     idx = engine.codes.index(concept_code)
     source_vec = engine.embeddings[idx].copy()
     sleep_vec = engine.sleep_consolidate(source_vec, n_passes=n_passes)
     
+    # Find post-sleep neighbors
     neighbors = engine.find_similar(sleep_vec, top_k=5)
     
     return {
@@ -104,7 +106,8 @@ def handle_sleep_task(task_payload: dict) -> dict:
         "cosine_shift": round(
             float(np.dot(source_vec, sleep_vec) / 
                   (np.linalg.norm(source_vec) * np.linalg.norm(sleep_vec))), 4
-        )
+        ),
+        "embedding_norm": float(np.linalg.norm(sleep_vec))
     }
 
 
@@ -121,7 +124,7 @@ def main():
     
     headers = {}
     if TOKEN:
-        headers["Authorization"] = f"Bearer {TOKEN}"
+        ***"Authorization"] = f"Bearer {TOKEN}"
     
     # Test health
     try:
@@ -176,9 +179,9 @@ def main():
                     task = claim_resp.json()
                     print(f"\n✓ Claimed task: {task.get('id')} ({task.get('type')})")
                     
-                    # Process task
+                    # Process task based on type
                     if task.get("type") == "sleep_consolidation":
-                        result = handle_sleep_task(task.get("payload", {}))
+                        result = handle_sleep_consolidation(task.get("payload", {}))
                         
                         # Complete task
                         complete_resp = requests.post(
@@ -188,7 +191,11 @@ def main():
                             timeout=10
                         )
                         print(f"  → Completed: {complete_resp.status_code}")
-                        print(f"  → Result: {json.dumps(result, indent=2)[:200]}")
+                        if result.get("status") == "success":
+                            print(f"  → Concept: {result['concept_code']}")
+                            print(f"  → Neighbors: {len(result['neighbors'])}")
+                        else:
+                            print(f"  → Error: {result.get('error')}")
                     else:
                         # Release unknown task type
                         requests.post(
@@ -196,7 +203,7 @@ def main():
                             headers=headers,
                             timeout=10
                         )
-                        print(f"  → Released (unknown type)")
+                        print(f"  → Released (unknown type: {task.get('type')})")
                 
                 elif claim_resp.status_code == 204:
                     print("· No tasks available", end="\r")
