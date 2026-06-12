@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Ciphemon Agent — Direct Coordinator Integration.
+Ciphemon Agent — Coordinator Integration.
 
 Polls coordinator for tasks using GET /tasks/claim.
 """
@@ -17,7 +17,7 @@ import requests
 
 # Configuration
 COORDINATOR = "http://100.119.15.111:8080"
-TOKEN = ***"DIGI_OFFICE_TOKEN", "8ecbedddd485c64eda2f49b7c1b78c800ddee8541eb92616a5f5a26c9ba217e1")
+TOKEN = "8ecbedddd485c64eda2f49b7c1b78c800ddee8541eb92616a5f5a26c9ba217e1"
 DB_PATH = "/Users/Ciphemon/.openclaw/workspace/LISA_FTM/db_523/ontology_mem_expanded.pkl"
 ALPHA = 2.339
 
@@ -86,7 +86,7 @@ def handle_sleep_consolidation(task_payload: dict) -> dict:
     if not concept_code or concept_code not in engine.codes:
         return {"status": "error", "error": f"Concept {concept_code} not found"}
     
-    # Run sleep consolidation on the concept
+    # Run sleep consolidation
     idx = engine.codes.index(concept_code)
     source_vec = engine.embeddings[idx].copy()
     sleep_vec = engine.sleep_consolidate(source_vec, n_passes=n_passes)
@@ -113,31 +113,31 @@ def handle_sleep_consolidation(task_payload: dict) -> dict:
 
 # Initialize engine
 engine = SleepEngine(DB_PATH, ALPHA)
-print(f"✓ SleepEngine loaded: {len(engine.codes)} concepts, alpha={ALPHA}")
+print(f"SleepEngine loaded: {len(engine.codes)} concepts, alpha={ALPHA}")
 
 
 def main():
     print("=" * 60)
-    print("CIPHEMON AGENT — Coordinator Mode")
+    print("CIPHEMON AGENT")
     print("=" * 60)
     print(f"Coordinator: {COORDINATOR}")
     
     headers = {}
     if TOKEN:
-        ***"Authorization"] = f"Bearer {TOKEN}"
+        headers["Authorization"] = f"Bearer {TOKEN}"
     
     # Test health
     try:
         resp = requests.get(f"{COORDINATOR}/health", timeout=5)
         health = resp.json()
-        print(f"\n✓ Coordinator health: {health}")
+        print(f"\nCoordinator health: {health}")
     except Exception as e:
-        print(f"\n⚠ Coordinator unreachable: {e}")
+        print(f"\nCoordinator unreachable: {e}")
         return
     
     agent_id = "ciphemon"
     
-    # Register/update agent capabilities
+    # Register capabilities
     try:
         register_resp = requests.post(
             f"{COORDINATOR}/agents/{agent_id}/activity",
@@ -145,9 +145,9 @@ def main():
             json={"capabilities": ["sleep_consolidation", "data_processing", "validation", "python", "embeddings", "crosswalk", "macos"]},
             timeout=10
         )
-        print(f"✓ Agent registered: {register_resp.status_code}")
+        print(f"Agent registered: {register_resp.status_code}")
     except Exception as e:
-        print(f"⚠ Registration warning: {e}")
+        print(f"Registration warning: {e}")
     
     print(f"\n[READY] Agent '{agent_id}' starting poll loop...")
     print("Press Ctrl+C to stop\n")
@@ -162,9 +162,9 @@ def main():
                     timeout=10
                 )
                 if hb_resp.status_code == 200:
-                    print(f"♥ Heartbeat OK", end="\r")
+                    print("Heartbeat OK", end="\r")
             except Exception as e:
-                print(f"♥ Heartbeat failed: {e}")
+                print(f"Heartbeat failed: {e}")
             
             # Claim task
             try:
@@ -177,9 +177,9 @@ def main():
                 
                 if claim_resp.status_code == 200:
                     task = claim_resp.json()
-                    print(f"\n✓ Claimed task: {task.get('id')} ({task.get('type')})")
+                    print(f"\nClaimed task: {task.get('id')} ({task.get('type')})")
                     
-                    # Process task based on type
+                    # Process task
                     if task.get("type") == "sleep_consolidation":
                         result = handle_sleep_consolidation(task.get("payload", {}))
                         
@@ -190,31 +190,31 @@ def main():
                             json={"result": result},
                             timeout=10
                         )
-                        print(f"  → Completed: {complete_resp.status_code}")
+                        print(f"  Completed: {complete_resp.status_code}")
                         if result.get("status") == "success":
-                            print(f"  → Concept: {result['concept_code']}")
-                            print(f"  → Neighbors: {len(result['neighbors'])}")
+                            print(f"  Concept: {result['concept_code']}")
+                            print(f"  Neighbors: {len(result['neighbors'])}")
                         else:
-                            print(f"  → Error: {result.get('error')}")
+                            print(f"  Error: {result.get('error')}")
                     else:
-                        # Release unknown task type
+                        # Release unknown task
                         requests.post(
                             f"{COORDINATOR}/tasks/{task['id']}/release",
                             headers=headers,
                             timeout=10
                         )
-                        print(f"  → Released (unknown type: {task.get('type')})")
+                        print(f"  Released (unknown type: {task.get('type')})")
                 
                 elif claim_resp.status_code == 204:
-                    print("· No tasks available", end="\r")
+                    print("No tasks", end="\r")
                 
             except Exception as e:
-                print(f"\n⚠ Claim failed: {e}")
+                print(f"\nClaim failed: {e}")
             
             time.sleep(5)
     
     except KeyboardInterrupt:
-        print("\n\n👋 Agent stopped.")
+        print("\n\nAgent stopped.")
 
 
 if __name__ == "__main__":
