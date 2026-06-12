@@ -1,221 +1,130 @@
-#!/usr/bin/env python3
 """
-Ciphemon Agent — Coordinator Integration.
-
-Polls coordinator for tasks using GET /tasks/claim.
+Ciphemon agent — runs on Mac Mini, connects to Digi-Office coordinator.
+Deploy: python3 ~/LISA_FTM/digi_office/deploy/ciphemon_agent.py
 """
+import sys, os, json, subprocess, numpy as np
 
-import json
-import os
-import pickle
-import sys
-import time
-from pathlib import Path
+sys.path.insert(0, os.path.expanduser("~/LISA_FTM/digi_office"))
 
-import numpy as np
-import requests
+from agent_sdk import Agent, Task
 
-# Configuration
 COORDINATOR = "http://100.119.15.111:8080"
-TOKEN = "8ecbedddd485c64eda2f49b7c1b78c800ddee8541eb92616a5f5a26c9ba217e1"
-DB_PATH = "/Users/Ciphemon/.openclaw/workspace/LISA_FTM/db_523/ontology_mem_expanded.pkl"
-ALPHA = 2.339
+TOKEN = os.environ.get(
+ "DIGI_OFFICE_TOKEN",
+ "8ecbedddd485c64eda2f49b7c1b78c800ddee8541eb92616a5f5a26c9ba217e1",
+)
+
+agent = Agent(
+ agent_id="ciphemon",
+ coordinator_url=COORDINATOR,
+ capabilities=[
+ "python", "embeddings", "crosswalk", "macos",
+ "validation", "gate", "byzantine", "heatmap",
+ "git", "linux", "ssh",
+ ],
+ 
+)
 
 
-class SleepEngine:
-    """Sleep consolidation engine."""
-    
-    def __init__(self, ontology_path: str, alpha: float = 2.339):
-        with open(ontology_path, 'rb') as f:
-            ontology = pickle.load(f)
-        
-        self.codes = [entry[0] for entry in ontology]
-        
-        # Normalize embeddings
-        self.embeddings = []
-        for entry in ontology:
-            vec = np.array(entry[3], dtype=np.float32)
-            if len(vec) > 384:
-                vec = vec[:384]
-            elif len(vec) < 384:
-                vec = np.pad(vec, (0, 384 - len(vec)), mode='constant')
-            self.embeddings.append(vec)
-        self.embeddings = np.array(self.embeddings)
-        
-        self.alpha = alpha
-        self.threshold = 0.6
-        self.top_k = 5
-    
-    def find_similar(self, query_vec: np.ndarray, top_k: int = 10):
-        query_norm = query_vec / (np.linalg.norm(query_vec) + 1e-8)
-        emb_norm = self.embeddings / (np.linalg.norm(self.embeddings, axis=1, keepdims=True) + 1e-8)
-        similarities = np.dot(emb_norm, query_norm)
-        top_indices = np.argsort(similarities)[-top_k:][::-1]
-        return [(self.codes[i], float(similarities[i])) for i in top_indices]
-    
-    def sleep_consolidate(self, vec: np.ndarray, n_passes: int = 4) -> np.ndarray:
-        current = vec.copy()
-        
-        for p in range(n_passes):
-            similar = self.find_similar(current, top_k=self.top_k + 1)
-            neighbor_vecs = []
-            for code, sim in similar[1:]:
-                if sim > self.threshold:
-                    idx = self.codes.index(code)
-                    neighbor_vecs.append(self.embeddings[idx])
-            
-            if not neighbor_vecs:
-                break
-            
-            context = np.mean(neighbor_vecs, axis=0)
-            delta = self.alpha * context
-            current = current + delta * (1.0 / (p + 1))
-            
-            norm = np.linalg.norm(current)
-            if norm > 0:
-                current = current / norm * np.linalg.norm(vec)
-        
-        return current
+def _run_commands(task: Task):
+ payload = task.payload or {}
+ cmds = payload.get("commands", [payload.get("command", "echo 'no command'")])
+ cwd = payload.get("cwd")
+ timeout = payload.get("timeout", 1200)
+ results = []
+ for cmd in cmds:
+  r = subprocess.run(cmd, shell=True, cwd=cwd, capture_output=True, text=True, timeout=timeout)
+  results.append({
+   "command": cmd, "returncode": r.returncode,
+   "stdout": r.stdout[:2000], "stderr": r.stderr[:500] if r.returncode != 0 else None,
+  })
+  if r.returncode != 0:
+   raise RuntimeError(f"Command failed: {cmd} — {r.stderr[:500]}")
+ return {"results": results}
 
 
-def handle_sleep_consolidation(task_payload: dict) -> dict:
-    """Handle sleep_consolidation task from coordinator."""
-    concept_code = task_payload.get("concept_code")
-    n_passes = task_payload.get("n_passes", 4)
-    
-    if not concept_code or concept_code not in engine.codes:
-        return {"status": "error", "error": f"Concept {concept_code} not found"}
-    
-    # Run sleep consolidation
-    idx = engine.codes.index(concept_code)
-    source_vec = engine.embeddings[idx].copy()
-    sleep_vec = engine.sleep_consolidate(source_vec, n_passes=n_passes)
-    
-    # Find post-sleep neighbors
-    neighbors = engine.find_similar(sleep_vec, top_k=5)
-    
-    return {
-        "status": "success",
-        "concept_code": concept_code,
-        "n_passes": n_passes,
-        "alpha": ALPHA,
-        "neighbors": [
-            {"code": code, "similarity": round(sim, 4)}
-            for code, sim in neighbors[:5]
-        ],
-        "cosine_shift": round(
-            float(np.dot(source_vec, sleep_vec) / 
-                  (np.linalg.norm(source_vec) * np.linalg.norm(sleep_vec))), 4
-        ),
-        "embedding_norm": float(np.linalg.norm(sleep_vec))
-    }
+@agent.task_handler("expand_ontology")
+def handle_expand_ontology(task: Task):
+ system = task.payload.get("system", "loinc")
+ output_path = task.payload.get("output_path", f"db_523/{system}_ontology_mem.pkl")
+ expand_script = os.path.expanduser("~/LISA_FTM/scripts/expand_snomed_ontology.py")
+ if not os.path.exists(expand_script):
+  raise FileNotFoundError(f"Expand script not found: {expand_script}")
+ result = subprocess.run(
+  ["python3", expand_script, "--system", system, "--output", output_path],
+  capture_output=True, text=True, timeout=600,
+ )
+ if result.returncode != 0:
+  raise RuntimeError(result.stderr[:500])
+ return {"artifact": output_path, "system": system}
 
 
-# Initialize engine
-engine = SleepEngine(DB_PATH, ALPHA)
-print(f"SleepEngine loaded: {len(engine.codes)} concepts, alpha={ALPHA}")
+@agent.task_handler("data_sync")
+def handle_data_sync(task: Task):
+ repo = task.payload.get("repo", os.path.expanduser("~/LISA_FTM"))
+ result = subprocess.run(
+  ["git", "-C", repo, "pull", "--rebase"],
+  capture_output=True, text=True, timeout=60,
+ )
+ return {
+  "exit_code": result.returncode,
+  "output": result.stdout.strip(),
+  "error": result.stderr.strip() if result.returncode != 0 else None,
+ }
 
 
-def main():
-    print("=" * 60)
-    print("CIPHEMON AGENT")
-    print("=" * 60)
-    print(f"Coordinator: {COORDINATOR}")
-    
-    headers = {}
-    if TOKEN:
-        headers["Authorization"] = f"Bearer {TOKEN}"
-    
-    # Test health
-    try:
-        resp = requests.get(f"{COORDINATOR}/health", timeout=5)
-        health = resp.json()
-        print(f"\nCoordinator health: {health}")
-    except Exception as e:
-        print(f"\nCoordinator unreachable: {e}")
-        return
-    
-    agent_id = "ciphemon"
-    
-    # Register capabilities
-    try:
-        register_resp = requests.post(
-            f"{COORDINATOR}/agents/{agent_id}/activity",
-            headers={**headers, "Content-Type": "application/json"},
-            json={"capabilities": ["sleep_consolidation", "data_processing", "validation", "python", "embeddings", "crosswalk", "macos"]},
-            timeout=10
-        )
-        print(f"Agent registered: {register_resp.status_code}")
-    except Exception as e:
-        print(f"Registration warning: {e}")
-    
-    print(f"\n[READY] Agent '{agent_id}' starting poll loop...")
-    print("Press Ctrl+C to stop\n")
-    
-    try:
-        while True:
-            # Send heartbeat
-            try:
-                hb_resp = requests.post(
-                    f"{COORDINATOR}/agents/{agent_id}/heartbeat",
-                    headers=headers,
-                    timeout=10
-                )
-                if hb_resp.status_code == 200:
-                    print("Heartbeat OK", end="\r")
-            except Exception as e:
-                print(f"Heartbeat failed: {e}")
-            
-            # Claim task
-            try:
-                claim_resp = requests.get(
-                    f"{COORDINATOR}/tasks/claim",
-                    headers=headers,
-                    params={"agent_id": agent_id, "capabilities": "data_processing,validation"},
-                    timeout=10
-                )
-                
-                if claim_resp.status_code == 200:
-                    task = claim_resp.json()
-                    print(f"\nClaimed task: {task.get('id')} ({task.get('type')})")
-                    
-                    # Process task
-                    if task.get("type") == "sleep_consolidation":
-                        result = handle_sleep_consolidation(task.get("payload", {}))
-                        
-                        # Complete task
-                        complete_resp = requests.post(
-                            f"{COORDINATOR}/tasks/{task['id']}/complete",
-                            headers={**headers, "Content-Type": "application/json"},
-                            json={"result": result},
-                            timeout=10
-                        )
-                        print(f"  Completed: {complete_resp.status_code}")
-                        if result.get("status") == "success":
-                            print(f"  Concept: {result['concept_code']}")
-                            print(f"  Neighbors: {len(result['neighbors'])}")
-                        else:
-                            print(f"  Error: {result.get('error')}")
-                    else:
-                        # Release unknown task
-                        requests.post(
-                            f"{COORDINATOR}/tasks/{task['id']}/release",
-                            headers=headers,
-                            timeout=10
-                        )
-                        print(f"  Released (unknown type: {task.get('type')})")
-                
-                elif claim_resp.status_code == 204:
-                    print("No tasks", end="\r")
-                
-            except Exception as e:
-                print(f"\nClaim failed: {e}")
-            
-            time.sleep(5)
-    
-    except KeyboardInterrupt:
-        print("\n\nAgent stopped.")
+@agent.task_handler("command")
+def handle_command(task: Task):
+ return _run_commands(task)
+
+
+@agent.task_handler("shell")
+def handle_shell(task: Task):
+ return _run_commands(task)
+
+
+@agent.task_handler("train")
+def handle_train(task: Task):
+ return {
+  "error": "ciphemon agent has no local GPU. Use dgx_training task type.",
+  "agent": "ciphemon",
+  "capabilities": agent.capabilities,
+ }
+
+
+@agent.task_handler("sleep_consolidation")
+def handle_sleep_consolidation(task: Task):
+ sys.path.insert(0, os.path.expanduser("~/LISA_FTM"))
+ concept_code = task.payload.get("concept_code")
+ n_passes = task.payload.get("n_passes", 4)
+ if not concept_code:
+  raise ValueError("Missing concept_code in payload")
+ from sentence_transformers import SentenceTransformer
+ model = SentenceTransformer("all-MiniLM-L6-v2")
+ class RealEmbedder:
+  def embed(self, text):
+   return model.encode(text)
+ from prototype_sleep_embedder import SleepEmbedder
+ sleep = SleepEmbedder(RealEmbedder(), sleep_passes=n_passes)
+ result_emb = sleep.embed(concept_code)
+ return {
+  "status": "success",
+  "concept_code": concept_code,
+  "n_passes": n_passes,
+  "embedding_norm": float(np.linalg.norm(result_emb)),
+  "embedding_dim": int(result_emb.shape[0]),
+ }
+
+
+@agent.message_handler("*")
+def handle_all_messages(msg):
+ from_agent = getattr(msg, "from_agent", "unknown")
+ agent.send_message(from_agent, "status_reply", {
+  "from": "ciphemon",
+  "received_type": msg.message_type,
+  "note": "Ciphemon online. sleep_consolidation handler active.",
+ })
 
 
 if __name__ == "__main__":
-    main()
+ agent.run(poll_interval=5)
