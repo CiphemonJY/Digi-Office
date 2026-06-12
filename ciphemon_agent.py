@@ -115,7 +115,7 @@ print(f"✓ SleepEngine loaded: {len(engine.codes)} concepts, alpha={ALPHA}")
 
 def main():
     print("=" * 60)
-    print("CIPHEMON AGENT — Direct Coordinator Mode")
+    print("CIPHEMON AGENT — Coordinator Mode")
     print("=" * 60)
     print(f"Coordinator: {COORDINATOR}")
     
@@ -133,6 +133,18 @@ def main():
         return
     
     agent_id = "ciphemon"
+    
+    # Register/update agent capabilities
+    try:
+        register_resp = requests.post(
+            f"{COORDINATOR}/agents/{agent_id}/activity",
+            headers={**headers, "Content-Type": "application/json"},
+            json={"capabilities": ["sleep_consolidation", "data_processing", "validation", "python", "embeddings", "crosswalk", "macos"]},
+            timeout=10
+        )
+        print(f"✓ Agent registered: {register_resp.status_code}")
+    except Exception as e:
+        print(f"⚠ Registration warning: {e}")
     
     print(f"\n[READY] Agent '{agent_id}' starting poll loop...")
     print("Press Ctrl+C to stop\n")
