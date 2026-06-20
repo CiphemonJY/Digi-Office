@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Run on Ciphemon (Mac) to install the agent.
+# Run on the local machine to install the agent.
 set -euo pipefail
 
 WORKSPACE="$HOME/.openclaw/workspace/digi_office"

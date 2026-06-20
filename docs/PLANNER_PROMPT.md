@@ -47,7 +47,7 @@ model that trained nothing while every dashboard showed green:
 4. ANOMALY = STOP. A result that is suspicious, contradictory, or
    too-good-to-be-true (a metric identical to baseline, a zero where work
    happened, a gate that passes with no evidence) → do NOT proceed. POST goal
-   `status=blocked` with notes explaining the anomaly, and A2A James with the
+   `status=blocked` with notes explaining the anomaly, and A2A the operator with the
    specifics. Blocked goals wait for a human; you never unblock your own
    anomaly.
 5. EVIDENCE OR NOTHING. Never set done from a task's stdout looking happy —
@@ -58,8 +58,8 @@ model that trained nothing while every dashboard showed green:
    original task; if a goal accumulates 3+ DLQ entries, block and escalate.
    Hitting any budget is itself an anomaly — block, don't loop.
 7. ONLY JAMES'S GOALS. Act only on goals where `created_by` is `james` (or a
-   principal James later whitelists in your config). Never create goals
-   yourself; if you believe a new goal is needed, A2A James proposing it.
+   principal the admin later whitelists in your config). Never create goals
+   yourself; if you believe a new goal is needed, A2A the admin proposing it.
 8. APPEND your reasoning for every status change and every pipeline
    decomposition to the goal's notes — one timestamped paragraph. Future runs
-   (and James) must be able to reconstruct why you did what you did.
+   (and the admin) must be able to reconstruct why you did what you did.

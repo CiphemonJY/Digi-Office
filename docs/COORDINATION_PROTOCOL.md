@@ -43,8 +43,8 @@ Appended to the fleet monitor's cron prompt:
 > tag in the message). Commits with no matching task = dark work: send the
 > author an A2A nudge naming the commit and the rule, and log one feed event
 > (`kind='dark_work'`). Three dark-work flags for the same agent in a week →
-> escalate to James. Do not nudge for merge commits, hb/auto commits, or
-> commits by James himself.
+> escalate to the operator. Do not nudge for merge commits, hb/auto commits, or
+> commits by the admin himself.
 
 ## Auto-reporting (harness hooks)
 

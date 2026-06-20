@@ -2,6 +2,7 @@
 Hermes agent — runs on WSL, connects to coordinator on localhost:8080.
 Deploy to: ~/.config/digi-office/hermes_agent.py
 """
+import os
 import sys
 import os
 import subprocess
@@ -23,7 +24,7 @@ def heartbeat():
             json={
                 "agent_id": AGENT_ID,
                 "hostname": "hermes-wsl",
-                "tailscale_ip": "100.113.198.30",
+                "tailscale_ip": os.environ.get("DIGI_OFFICE_COORDINATOR_IP", "coordinator.local"),
                 "capabilities": CAPABILITIES,
                 "current_task_id": None,
             },
@@ -87,7 +88,7 @@ def handle_fleet_sync(task):
         # Proxy via SSH
         ssh_cmd = [
             "ssh", "-o", "StrictHostKeyChecking=no", "-o", "BatchMode=yes",
-            f"syeung@{target}", *command,
+            f"{os.environ.get("DIGI_OFFICE_DGX_USER", "worker")}@{target}", *command,
         ]
     else:
         # Local execution

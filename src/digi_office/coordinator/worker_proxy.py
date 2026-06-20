@@ -1,4 +1,5 @@
 import json
+import os
 import subprocess
 import time
 import logging
@@ -8,9 +9,9 @@ logger = logging.getLogger(__name__)
 
 MACHINES = {
     "jetson": {
-        "host": "10.0.0.121",
-        "user": "jetson",
-        "key": "~/.ssh/id_ed25519_openclaw",
+        "host": os.environ.get("DIGI_OFFICE_JETSON_HOST", "jetson.local"),
+        "user": os.environ.get("DIGI_OFFICE_JETSON_USER", "worker"),
+        "key": os.environ.get("DIGI_OFFICE_JETSON_KEY", "~/.ssh/id_ed25519"),
         "ssh_binary": "ssh",
         "ssh_opts": [
             "-o", "StrictHostKeyChecking=no",
@@ -21,13 +22,13 @@ MACHINES = {
         ],
     },
     "dgx_primary": {
-        "host": "100.72.65.100",
-        "user": "syeung",
+        "host": os.environ.get("DIGI_OFFICE_DGX_PRIMARY_HOST", "dgx-primary.local"),
+        "user": os.environ.get("DIGI_OFFICE_DGX_PRIMARY_USER", "worker"),
         "ssh_binary": "ssh",
     },
     "dgx_secondary": {
-        "host": "100.99.1.84",
-        "user": "syeung",
+        "host": os.environ.get("DIGI_OFFICE_DGX_SECONDARY_HOST", "dgx-secondary.local"),
+        "user": os.environ.get("DIGI_OFFICE_DGX_SECONDARY_USER", "worker"),
         "ssh_binary": "ssh",
     },
 }

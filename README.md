@@ -2,7 +2,7 @@
 
 Agent-to-agent task coordination framework.
 
-Used by OpenClaw (hospital CI) and LISA_FTM (federated learning) to dispatch, track, and retry tasks across autonomous AI agents (Ciphemon, Revalomon, Hermesmon).
+Used by OpenClaw (hospital CI) and LISA_FTM (federated learning) to dispatch, track, and retry tasks across autonomous AI agents.
 
 ## Quickstart
 
@@ -57,7 +57,7 @@ python -m digi_office.coordinator.server
 - **Status changes** (`POST /goals/{id}/status`) append timestamped notes
   (never overwrite) so every decision is reconstructable.
 - **Contract**: only the planner agent decomposes goals and sets goal status
-  (see [docs/PLANNER_PROMPT.md](docs/PLANNER_PROMPT.md)); only James (or a
+  (see [docs/PLANNER_PROMPT.md](docs/PLANNER_PROMPT.md)); only the admin (or a
   whitelisted principal) creates goals. Workers execute; the planner decides.
 - Active goals render as a noticeboard with progress bars on the `/office`
   wall.

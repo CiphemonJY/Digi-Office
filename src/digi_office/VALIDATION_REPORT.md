@@ -32,9 +32,9 @@ Digi_Office/
 ```
 
 ## Core Architecture ✅
-- **Coordinator** (FastAPI): runs on Hermes (WSL) at `100.113.198.30:8080`
+- **Coordinator** (FastAPI): runs on Coordinator at `coordinator.local:8080`
 - **Smart Agents** (Agent SDK): Ciphemon (Mac), any future machine
-- **Dumb Workers** (SSH proxy): Jetson `10.0.0.121`, DGX `100.72.65.100`
+- **Dumb Workers** (SSH proxy): Jetson `jetson.local`, DGX `dgx-primary.local`
 
 ## Features Validated
 
@@ -66,7 +66,7 @@ Digi_Office/
 
 ## Smoke Test Results
 
-Tests pass individually but flake in batch due to SQLite concurrent access on macOS (WAL mode + pytest). Core acceptance criteria verified:
+Tests pass individually but flake in batch due to SQLite concurrent access on macOS (WAL mode + pytest). Core acceptance criteria successfully tested:
 
 - ✅ AC1: Health endpoint returns JSON
 - ✅ AC3: Task lifecycle (submit → claim → complete)
@@ -84,11 +84,11 @@ Tests pass individually but flake in batch due to SQLite concurrent access on ma
 
 | Component | Location | Status |
 |-----------|----------|--------|
-| Coordinator | Hermes (WSL) | ⏳ Not yet deployed |
+| Coordinator | Coordinator | ⏳ Not yet deployed |
 | Agent SDK | Ciphemon (Mac) | ✅ Code ready, needs launchd load |
 | Ciphemon agent | Mac Mini | ✅ Script ready at `deploy/ciphemon_agent.py` |
-| Jetson proxy | Jetson `10.0.0.121` | ⏳ SSH auth already works |
-| DGX proxy | DGX `100.72.65.100` | ⏳ SSH auth already works |
+| Jetson proxy | Jetson `jetson.local` | ⏳ SSH auth already works |
+| DGX proxy | DGX `dgx-primary.local` | ⏳ SSH auth already works |
 
 ## Next Steps
 
@@ -101,5 +101,5 @@ Tests pass individually but flake in batch due to SQLite concurrent access on ma
 - `Digi_Office/coordinator/db.py` — Fixed `claim_task()` starvation bug
 
 *Validated: 2026-06-04 14:35 CDT*
-*Coordinator: Hermes (WSL) @ 100.113.198.30:8080*
-*Agent: Ciphemon (Mac Mini) @ 100.79.58.88*
+*Coordinator: Coordinator @ coordinator.local:8080*
+*Agent: Local Agent @ agent.local*

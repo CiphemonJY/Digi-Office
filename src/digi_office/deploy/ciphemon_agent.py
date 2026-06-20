@@ -1,5 +1,6 @@
+import os
 """
-Ciphemon agent — runs on Mac, connects to Hermes coordinator.
+Agent — runs on local machine, connects to Hermes coordinator.
 Deploy to: ~/.openclaw/scripts/ciphemon_agent.py
 """
 import sys
@@ -10,7 +11,7 @@ sys.path.insert(0, os.path.expanduser("~/.openclaw/workspace/digi_office"))
 
 from agent_sdk import Agent, Task
 
-COORDINATOR = "http://100.113.198.30:8080"
+COORDINATOR = os.environ.get("DIGI_OFFICE_COORDINATOR_URL", "http://localhost:8080")
 
 agent = Agent(
     agent_id="ciphemon",

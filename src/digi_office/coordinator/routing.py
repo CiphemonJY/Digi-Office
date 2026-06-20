@@ -1,5 +1,5 @@
 ROUTING_TABLE = {
-    # ── Ontology pipeline (Ciphemon → DGX validation) ──────────────
+    # ── Ontology pipeline (local agent → DGX validation) ──────────────
     "expand_ontology": {
         "default": "ciphemon",
         "fallback": "hermes",
@@ -87,7 +87,7 @@ ROUTING_TABLE = {
         "proxy": True,
     },
 
-    # ── LLM Sleep (Ciphemon's sleep-enhanced embedder) ─────────────
+    # ── LLM Sleep (the sleep-enhanced embedder) ─────────────
     # Paper: arXiv:2605.26099v3 — multi-pass embedding consolidation.
     "sleep_consolidation": {
         "default": "ciphemon",
@@ -98,7 +98,7 @@ ROUTING_TABLE = {
 
     # ── DGX CUDA training (dispatches to cluster) ──────────────────
     # Use for any torchrun/torch.distributed work on the 2-GPU cluster.
-    # Nodes: spark (100.72.65.100) + spark-8686 (100.99.1.84).
+    # Nodes: configured via env vars
     # Supports nnodes=1 (single-node) or nnodes=2 (distributed).
     "dgx_training": {
         "default": "dgx_primary",

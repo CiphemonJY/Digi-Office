@@ -33,8 +33,8 @@ All machines must be on the same **Tailscale tailnet** before starting.
 |---|---|
 | Python 3.10+ | `python3 --version` |
 | Tailscale | `tailscale status` |
-| SSH key auth Hermes→Jetson | `ssh jetson@10.0.0.121 echo ok` |
-| SSH key auth Hermes→DGX | `ssh syeung@100.72.65.100 echo ok` |
+| SSH key auth Hermes→Jetson | `ssh jetson@jetson.local echo ok` |
+| SSH key auth Hermes→DGX | `ssh worker@dgx-primary.local echo ok` |
 
 ---
 
@@ -44,7 +44,7 @@ All machines must be on the same **Tailscale tailnet** before starting.
 
 ```bash
 # Option A: copy from your Windows machine
-cp -r /mnt/c/Users/james/Workbench/digi_office ~/digi_office
+cp -r /path/to/digi_office ~/digi_office
 
 # Option B: clone directly if you push it to GitHub
 git clone https://github.com/CiphemonJY/LISA_FTM.git
@@ -65,10 +65,10 @@ cd ~/digi_office
 python -m uvicorn coordinator.server:app --host 0.0.0.0 --port 8080
 ```
 
-Open `http://100.113.198.30:8080/health` in your browser.
+Open `http://coordinator.local:8080/health` in your browser.
 You should see: `{"status":"ok","agents_online":0,"queue_depth":0}`
 
-Open `http://100.113.198.30:8080/dashboard` to see the live dashboard.
+Open `http://coordinator.local:8080/dashboard` to see the live dashboard.
 
 Press `Ctrl+C` to stop, then continue to the systemd setup.
 
@@ -100,8 +100,8 @@ journalctl --user -u digi-office -f
 
 ### Hermes verification checklist
 
-- [ ] `curl http://100.113.198.30:8080/health` returns `{"status":"ok",...}`
-- [ ] Dashboard loads at `http://100.113.198.30:8080/dashboard`
+- [ ] `curl http://coordinator.local:8080/health` returns `{"status":"ok",...}`
+- [ ] Dashboard loads at `http://coordinator.local:8080/dashboard`
 - [ ] Service survives a reboot: `sudo reboot` then re-check health endpoint
 
 ---
@@ -169,7 +169,7 @@ from agent_sdk import Agent, Task
 
 agent = Agent(
     agent_id="ciphemon",
-    coordinator_url="http://100.113.198.30:8080",
+    coordinator_url="http://coordinator.local:8080",
     capabilities=["python", "embeddings", "crosswalk", "macos"],
 )
 
@@ -224,7 +224,7 @@ Any machine on the Tailnet with Python 3.10+ can become an agent in under 5 minu
 ### 3a. Copy the SDK
 
 ```bash
-scp -r james@100.113.198.30:~/digi_office/agent_sdk/ ~/digi_office/agent_sdk/
+scp -r admin@coordinator.local:~/digi_office/agent_sdk/ ~/digi_office/agent_sdk/
 pip install requests
 ```
 
@@ -238,7 +238,7 @@ from agent_sdk import Agent, Task
 
 agent = Agent(
     agent_id="my_new_machine",          # appears in the dashboard
-    coordinator_url="http://100.113.198.30:8080",
+    coordinator_url="http://coordinator.local:8080",
     capabilities=["python", "gpu"],     # what tasks this machine can claim
 )
 
@@ -318,7 +318,7 @@ def _build_command(self, task_type: str, payload: dict) -> str:
 The dashboard is served by the coordinator at:
 
 ```
-http://100.113.198.30:8080/dashboard
+http://coordinator.local:8080/dashboard
 ```
 
 It auto-refreshes every 12 seconds and connects to the SSE event stream for real-time updates. If SSE fails (e.g. behind a reverse proxy that buffers), it automatically falls back to polling every 3 seconds.
@@ -345,9 +345,9 @@ Click any row in the Task Queue to see the full payload, result, error, and even
 
 | Problem | Check |
 |---|---|
-| Agent never appears Online | `curl http://100.113.198.30:8080/agents` — is it there? Check Tailscale connectivity. |
+| Agent never appears Online | `curl http://coordinator.local:8080/agents` — is it there? Check Tailscale connectivity. |
 | Tasks stuck in `pending` | No agent has matching capabilities. Check `required_capabilities` in routing.py. |
-| Proxy task silently fails | Run the SSH command manually from Hermes: `ssh jetson@10.0.0.121 'echo ok'` |
+| Proxy task silently fails | Run the SSH command manually from Hermes: `ssh jetson@jetson.local 'echo ok'` |
 | SSE shows POLL not SSE | Normal behind Nginx without `proxy_buffering off`. Add that header or use polling mode. |
 | `ModuleNotFoundError: agent_sdk` | Set `PYTHONPATH=~/digi_office` or run from the `digi_office/` directory. |
 | Port 8080 unreachable | Check Windows Firewall. In WSL: `netsh interface portproxy add v4tov4 listenport=8080 connectaddress=<WSL_IP>` |
